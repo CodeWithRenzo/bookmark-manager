@@ -1,0 +1,3632 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Bookmark Manager</title>
+<meta name="description" content="A fast, private, single-file bookmark manager. Everything is stored locally in your browser.">
+
+<!--
+  Theme bootstrap: runs before the body paints so the correct theme is applied
+  on the very first frame (prevents the "flash of wrong theme").
+  It reads only the persisted preference; any failure falls back to light.
+-->
+<script>
+(function () {
+  try {
+    var raw = localStorage.getItem('bookmark-manager.state.v1');
+    var pref = 'system';
+    if (raw) {
+      var parsed = JSON.parse(raw);
+      if (parsed && parsed.prefs && typeof parsed.prefs.theme === 'string') {
+        pref = parsed.prefs.theme;
+      }
+    }
+    var resolved = (pref === 'light' || pref === 'dark')
+      ? pref
+      : (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    document.documentElement.setAttribute('data-theme', resolved);
+  } catch (err) {
+    document.documentElement.setAttribute('data-theme', 'light');
+  }
+})();
+</script>
+
+<style>
+/* =========================================================================
+   1. DESIGN TOKENS
+   ========================================================================= */
+:root {
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  --r-sm: 6px;
+  --r-md: 9px;
+  --r-lg: 14px;
+  --r-full: 999px;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #fbfbfc;
+  --sidebar-bg: #f5f5f7;
+  --surface: #ffffff;
+  --surface-2: #f4f4f6;
+  --surface-hover: #ededf0;
+  --border: #e5e5e9;
+  --border-strong: #d2d2d9;
+  --text: #111114;
+  --text-2: #5a5a63;
+  --text-3: #8b8b95;
+  --invert-bg: #111114;
+  --invert-fg: #ffffff;
+  --focus-ring: #111114;
+  --shadow-sm: 0 1px 2px rgba(17, 17, 20, .05);
+  --shadow-md: 0 2px 4px rgba(17, 17, 20, .05), 0 16px 34px rgba(17, 17, 20, .10);
+  --overlay: rgba(17, 17, 20, .42);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0a0a0b;
+  --sidebar-bg: #0e0e10;
+  --surface: #131315;
+  --surface-2: #1a1a1d;
+  --surface-hover: #1f1f23;
+  --border: #26262b;
+  --border-strong: #3a3a42;
+  --text: #f3f3f5;
+  --text-2: #a5a5b0;
+  --text-3: #77777f;
+  --invert-bg: #f3f3f5;
+  --invert-fg: #0a0a0b;
+  --focus-ring: #f3f3f5;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, .45);
+  --shadow-md: 0 2px 4px rgba(0, 0, 0, .45), 0 16px 34px rgba(0, 0, 0, .55);
+  --overlay: rgba(0, 0, 0, .64);
+}
+
+/* =========================================================================
+   2. RESET & BASE
+   ========================================================================= */
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body.is-locked { overflow: hidden; }
+
+h1, h2, h3, h4, p, dl, dd, dt { margin: 0; }
+
+button, input, select, textarea { font: inherit; color: inherit; }
+
+a { color: inherit; }
+
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.icon-sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+
+.icon {
+  width: 16px; height: 16px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.icon--sm { width: 14px; height: 14px; }
+
+/* =========================================================================
+   3. BUTTONS & CONTROLS
+   ========================================================================= */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color .14s ease, border-color .14s ease, opacity .14s ease;
+}
+.btn:hover { background: var(--surface-hover); }
+.btn:active { transform: translateY(.5px); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+
+.btn--primary {
+  background: var(--invert-bg);
+  border-color: var(--invert-bg);
+  color: var(--invert-fg);
+}
+.btn--primary:hover { background: var(--invert-bg); opacity: .87; }
+
+.btn--ghost { background: transparent; border-color: transparent; color: var(--text-2); }
+.btn--ghost:hover { background: var(--surface-hover); color: var(--text); }
+
+.btn--sm { height: 28px; padding: 0 9px; font-size: 12px; }
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px; height: 30px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background-color .14s ease, color .14s ease, opacity .14s ease;
+}
+.icon-btn:hover { background: var(--surface-hover); color: var(--text); }
+.icon-btn[aria-pressed="true"] { color: var(--text); }
+
+/* =========================================================================
+   4. APPLICATION SHELL
+   ========================================================================= */
+.app {
+  display: grid;
+  grid-template-columns: 264px minmax(0, 1fr);
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+/* ---------- Sidebar ---------- */
+.sidebar {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  height: 100vh;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px 10px;
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  z-index: 60;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 4px 8px 16px;
+}
+.brand svg { width: 21px; height: 21px; flex: none; }
+.brand-name { font-size: 13.5px; font-weight: 650; letter-spacing: -.01em; }
+.brand-name span { font-weight: 500; color: var(--text-3); }
+
+.nav { display: flex; flex-direction: column; gap: 1px; }
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color .12s ease, color .12s ease;
+}
+.nav-item:hover { background: var(--surface-hover); color: var(--text); }
+.nav-item[aria-current="page"] {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.nav-item .icon { color: var(--text-3); }
+.nav-item[aria-current="page"] .icon { color: var(--text); }
+
+.nav-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.nav-count {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+  font-weight: 500;
+}
+
+.side-section { margin-top: 16px; }
+.side-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 9px 4px;
+}
+.side-head h2 {
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: .075em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.nav-empty {
+  padding: 3px 9px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.side-foot {
+  margin-top: auto;
+  padding-top: 14px;
+  display: flex;
+  gap: 4px;
+}
+.side-foot .btn { flex: 1; justify-content: flex-start; }
+
+/* ---------- Mobile scrim ---------- */
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  background: var(--overlay);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .18s ease;
+}
+.scrim.is-open { opacity: 1; pointer-events: auto; }
+
+/* ---------- Main ---------- */
+.main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 22px 28px 72px;
+}
+
+.topbar { display: flex; align-items: flex-start; gap: 12px; }
+.topbar-text { min-width: 0; }
+.topbar h1 {
+  font-size: 21px;
+  font-weight: 650;
+  letter-spacing: -.022em;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+.topbar p { margin-top: 3px; font-size: 13px; color: var(--text-2); }
+.topbar-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.menu-btn { display: none; }
+
+/* ---------- Toolbar ---------- */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.search { position: relative; flex: 1 1 280px; min-width: 170px; }
+.search > .icon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-3);
+  pointer-events: none;
+}
+.search input {
+  width: 100%;
+  height: 36px;
+  padding: 0 34px 0 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  transition: border-color .14s ease;
+}
+.search input::placeholder { color: var(--text-3); }
+.search input:focus { border-color: var(--border-strong); outline: none; }
+.search input:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.search input::-webkit-search-cancel-button { display: none; }
+
+.search-clear {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 26px; height: 26px;
+}
+
+.toolbar-right { display: flex; align-items: center; gap: 8px; }
+
+.select-wrap { position: relative; display: inline-flex; }
+.select-wrap .icon {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-3);
+  pointer-events: none;
+}
+.select-wrap select {
+  height: 36px;
+  padding: 0 28px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+}
+
+.seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+}
+.seg button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px; height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: background-color .12s ease, color .12s ease;
+}
+.seg button:hover { color: var(--text); }
+.seg button[aria-pressed="true"] {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.seg--text button { width: auto; padding: 0 10px; font-size: 12px; font-weight: 500; }
+
+/* ---------- Banners & meta ---------- */
+.banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 13px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+.banner > .icon { margin-top: 1px; }
+.banner-body { flex: 1; min-width: 0; }
+.banner-title { font-size: 13px; font-weight: 600; }
+.banner-text { margin-top: 2px; font-size: 12.5px; color: var(--text-2); }
+.banner-actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+
+.list-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-height: 22px;
+}
+.list-count { font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+
+.active-filters { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+/* =========================================================================
+   5. BOOKMARK COLLECTION
+   ========================================================================= */
+.bookmark-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.bookmark-list { display: flex; flex-direction: column; gap: 6px; }
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 13px 13px 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  transition: border-color .14s ease, box-shadow .14s ease;
+}
+.card:hover { border-color: var(--border-strong); box-shadow: var(--shadow-sm); }
+.card:focus-within { border-color: var(--border-strong); }
+
+.card-main { display: flex; gap: 10px; align-items: flex-start; min-width: 0; flex: 1; }
+
+.site-mark {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px; height: 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+.card-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+
+.card-title-row { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+
+.card-title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.card-title:hover { text-decoration: underline; text-underline-offset: 2px; }
+
+.card-host {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-desc {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-top: 3px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+.card-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 170px;
+  height: 20px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+button.chip { cursor: pointer; transition: background-color .12s ease, color .12s ease, border-color .12s ease; }
+button.chip:hover { background: var(--surface-hover); color: var(--text); border-color: var(--border-strong); }
+.chip--cat { background: var(--surface-2); }
+
+.card-actions { display: flex; justify-content: flex-end; gap: 1px; }
+.card-actions .icon-btn { width: 27px; height: 27px; }
+.star-btn[aria-pressed="true"] .icon { fill: currentColor; }
+
+@media (hover: hover) and (pointer: fine) {
+  .card-action:not(.star-btn) { opacity: 0; }
+  .card:hover .card-action,
+  .card:focus-within .card-action { opacity: 1; }
+}
+
+/* List presentation */
+.bookmark-list .card { flex-direction: row; align-items: center; padding: 8px 10px; gap: 10px; }
+.bookmark-list .card-main { align-items: center; }
+.bookmark-list .card-body { gap: 0; }
+.bookmark-list .card-title-row { flex-direction: row; align-items: baseline; gap: 8px; }
+.bookmark-list .card-title { -webkit-line-clamp: 1; }
+.bookmark-list .card-host { flex: none; }
+.bookmark-list .card-desc { -webkit-line-clamp: 1; margin-top: 2px; }
+.bookmark-list .card-chips { margin-top: 3px; }
+.bookmark-list .card-actions { flex: none; }
+
+/* ---------- Empty states ---------- */
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 64px 20px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-md);
+  text-align: center;
+}
+.empty .icon { width: 22px; height: 22px; color: var(--text-3); }
+.empty h2 { font-size: 15px; font-weight: 650; letter-spacing: -.01em; }
+.empty p { max-width: 46ch; font-size: 13px; color: var(--text-2); }
+.empty-actions { display: flex; gap: 8px; margin-top: 4px; flex-wrap: wrap; justify-content: center; }
+
+/* =========================================================================
+   6. MODAL SYSTEM
+   ========================================================================= */
+.modal-root {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+.modal-root[hidden] { display: none; }
+
+.modal-backdrop { position: absolute; inset: 0; background: var(--overlay); }
+
+.modal {
+  position: relative;
+  width: 100%;
+  max-width: 520px;
+  max-height: min(88vh, 780px);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+  animation: modal-in .16s ease;
+}
+@keyframes modal-in {
+  from { opacity: 0; transform: translateY(6px) scale(.994); }
+  to   { opacity: 1; transform: none; }
+}
+
+.modal-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px 16px 8px;
+}
+.modal-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -.012em;
+  line-height: 1.35;
+}
+.modal-body { padding: 4px 16px 16px; overflow-y: auto; overscroll-behavior: contain; }
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  flex-wrap: wrap;
+}
+
+.dialog-text { font-size: 13px; line-height: 1.55; color: var(--text-2); }
+.dialog-text + .dialog-text { margin-top: 8px; }
+
+/* ---------- Forms ---------- */
+.field { display: flex; flex-direction: column; gap: 5px; margin-top: 12px; }
+.field > label { font-size: 12px; font-weight: 600; color: var(--text-2); }
+.field .req { color: var(--text-3); font-weight: 400; }
+
+.field input,
+.field textarea,
+.field select {
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  transition: border-color .14s ease;
+}
+.field textarea { min-height: 66px; resize: vertical; line-height: 1.5; }
+.field input:focus, .field textarea:focus, .field select:focus { border-color: var(--border-strong); outline: none; }
+.field input:focus-visible, .field textarea:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.field input::placeholder, .field textarea::placeholder { color: var(--text-3); }
+
+.field input[aria-invalid="true"],
+.field textarea[aria-invalid="true"] { border-color: var(--text); }
+
+.hint { font-size: 11.5px; color: var(--text-3); }
+
+.field-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+}
+.field-error::before {
+  content: "!";
+  display: inline-grid;
+  place-items: center;
+  width: 14px; height: 14px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--invert-bg);
+  color: var(--invert-fg);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+.checkbox input { width: 15px; height: 15px; accent-color: var(--text); cursor: pointer; }
+
+.field-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.field-row > .field { flex: 1 1 180px; }
+
+/* ---------- Settings ---------- */
+.settings-section { padding: 14px 0; border-top: 1px solid var(--border); }
+.settings-section:first-child { border-top: 0; padding-top: 4px; }
+.settings-title {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-bottom: 8px;
+}
+.settings-note { font-size: 12px; line-height: 1.55; color: var(--text-2); margin-top: 8px; }
+.btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.dropzone {
+  margin-top: 10px;
+  padding: 14px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-sm);
+  font-size: 12px;
+  color: var(--text-3);
+  text-align: center;
+  transition: border-color .14s ease, background-color .14s ease, color .14s ease;
+}
+.dropzone.is-over { border-color: var(--text); color: var(--text); background: var(--surface-2); }
+
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
+.stats > div {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+.stats dt { font-size: 11px; color: var(--text-3); }
+.stats dd { font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; }
+
+.kbd-list { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; font-size: 12.5px; color: var(--text-2); }
+kbd {
+  display: inline-block;
+  min-width: 20px;
+  padding: 1px 5px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text);
+  text-align: center;
+}
+
+/* ---------- Toasts ---------- */
+.toast-region {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: none;
+}
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 360px;
+  padding: 9px 12px;
+  border-radius: var(--r-sm);
+  background: var(--invert-bg);
+  color: var(--invert-fg);
+  font-size: 12.5px;
+  font-weight: 500;
+  box-shadow: var(--shadow-md);
+  animation: toast-in .16s ease;
+  cursor: default;
+}
+.toast span { min-width: 0; overflow-wrap: anywhere; }
+.toast button {
+  margin-left: 4px;
+  padding: 2px 7px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.toast button:hover { opacity: .8; }
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* =========================================================================
+   7. RESPONSIVE
+   ========================================================================= */
+@media (max-width: 900px) {
+  .app { grid-template-columns: 1fr; }
+
+  .sidebar {
+    position: fixed;
+    top: 0; bottom: 0; left: 0;
+    width: min(84vw, 300px);
+    height: 100dvh;
+    transform: translateX(-102%);
+    transition: transform .2s ease;
+    border-right: 1px solid var(--border);
+    box-shadow: var(--shadow-md);
+  }
+  .sidebar.is-open { transform: none; }
+
+  .menu-btn { display: inline-flex; }
+
+  .main { padding: 16px 16px 80px; }
+  .topbar { align-items: center; flex-wrap: wrap; }
+  .topbar h1 { font-size: 18px; }
+  .topbar-actions { margin-left: auto; }
+
+  .bookmark-grid { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+
+  .bookmark-list .card { flex-direction: column; align-items: stretch; }
+  .bookmark-list .card-actions { justify-content: flex-end; }
+}
+
+@media (max-width: 560px) {
+  .main { padding: 14px 12px 90px; gap: 12px; }
+  .topbar-actions .btn { height: 32px; padding: 0 10px; }
+  .btn-add-label { display: none; }
+  .bookmark-grid { grid-template-columns: 1fr; }
+  .toolbar { gap: 8px; }
+  .search { flex-basis: 100%; }
+  .toolbar-right { margin-left: auto; }
+  .toast-region { left: 12px; right: 12px; bottom: 12px; align-items: stretch; }
+  .toast { max-width: none; }
+  .modal-root { padding: 0; align-items: end; }
+  .modal {
+    max-width: none;
+    max-height: 92dvh;
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
+    border-bottom: 0;
+  }
+}
+
+/* =========================================================================
+   8. MOTION PREFERENCES
+   ========================================================================= */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+</style>
+</head>
+
+<body>
+
+<!-- =====================================================================
+     SVG ICON SPRITE (inline, no external requests)
+     ===================================================================== -->
+<svg xmlns="http://www.w3.org/2000/svg" class="icon-sprite" aria-hidden="true" focusable="false">
+  <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 2.9l2.9 5.85 6.45.94-4.67 4.55 1.1 6.42L12 17.63 6.22 20.66l1.1-6.42L2.65 9.69l6.45-.94z"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20.5 20.5l-4.35-4.35"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 24 24"><path d="M12.5 20H21"/><path d="M16.4 3.6a2.1 2.1 0 013 3L7.5 18.5 3 20l1.5-4.5z"/></symbol>
+  <symbol id="i-archive" viewBox="0 0 24 24"><rect x="3" y="3.5" width="18" height="4.5" rx="1"/><path d="M5 8v11.5a1 1 0 001 1h12a1 1 0 001-1V8"/><path d="M10 12.5h4"/></symbol>
+  <symbol id="i-unarchive" viewBox="0 0 24 24"><rect x="3" y="3.5" width="18" height="4.5" rx="1"/><path d="M5 8v11.5a1 1 0 001 1h12a1 1 0 001-1V8"/><path d="M12 17v-5"/><path d="M9.5 14.5L12 12l2.5 2.5"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3.5 6h17"/><path d="M9 6V4.2A1.2 1.2 0 0110.2 3h3.6A1.2 1.2 0 0115 4.2V6"/><path d="M18.5 6l-1 13.6a1.5 1.5 0 01-1.5 1.4H8a1.5 1.5 0 01-1.5-1.4L5.5 6"/></symbol>
+  <symbol id="i-restore" viewBox="0 0 24 24"><path d="M3 3.5v5.5h5.5"/><path d="M3.9 13.5a8.5 8.5 0 102.2-6.1L3 9.5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20.8 13.3A8.6 8.6 0 1110.7 3.2a7 7 0 0010.1 10.1z"/></symbol>
+  <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="12.5" rx="1.5"/><path d="M8.5 20.5h7M12 16.5v4"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="7" height="7" rx="1.2"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.2"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.2"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.2"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3.6 6h.02M3.6 12h.02M3.6 18h.02"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 21v-6M4 11V3M12 21v-9M12 8V3M20 21v-4M20 13V3"/><circle cx="4" cy="13.5" r="2"/><circle cx="12" cy="10.5" r="2"/><circle cx="20" cy="15.5" r="2"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M21 19a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h7a2 2 0 012 2z"/></symbol>
+  <symbol id="i-tag" viewBox="0 0 24 24"><path d="M20.6 13.4l-7.2 7.2a2 2 0 01-2.8 0L2 12V2h10l8.6 8.6a2 2 0 010 2.8z"/><circle cx="7" cy="7" r="1.3"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
+  <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M21 12.5h-5l-2 3h-4l-2-3H3"/><path d="M5.5 4.5h13l2.5 8v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6z"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M12 15V3"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><path d="M7.5 7.5L12 3l4.5 4.5"/><path d="M12 3v12"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6.5L9.5 17 4 11.5"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3.5l9 16H3z"/><path d="M12 9.5v4.5M12 17h.01"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M6 9.5l6 6 6-6"/></symbol>
+</svg>
+
+<!-- =====================================================================
+     APPLICATION SHELL
+     ===================================================================== -->
+<div class="app">
+
+  <!-- ------------------------------- Sidebar ------------------------------- -->
+  <aside class="sidebar" id="sidebar" aria-label="Main navigation">
+    <div class="brand">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M6 3.5h12a1 1 0 011 1V21l-7-4.2L5 21V4.5a1 1 0 011-1z"/>
+      </svg>
+      <span class="brand-name">Bookmark<span> Manager</span></span>
+    </div>
+
+    <nav class="nav" id="mainNav" aria-label="Bookmark views">
+      <button class="nav-item" type="button" data-view="all">
+        <svg class="icon" aria-hidden="true"><use href="#i-inbox" xlink:href="#i-inbox"></use></svg>
+        <span class="nav-label">All Bookmarks</span>
+        <span class="nav-count" data-count="all">0</span>
+      </button>
+      <button class="nav-item" type="button" data-view="favorites">
+        <svg class="icon" aria-hidden="true"><use href="#i-star" xlink:href="#i-star"></use></svg>
+        <span class="nav-label">Favorites</span>
+        <span class="nav-count" data-count="favorites">0</span>
+      </button>
+      <button class="nav-item" type="button" data-view="recent">
+        <svg class="icon" aria-hidden="true"><use href="#i-clock" xlink:href="#i-clock"></use></svg>
+        <span class="nav-label">Recently Added</span>
+        <span class="nav-count" data-count="recent">0</span>
+      </button>
+      <button class="nav-item" type="button" data-view="archive">
+        <svg class="icon" aria-hidden="true"><use href="#i-archive" xlink:href="#i-archive"></use></svg>
+        <span class="nav-label">Archive</span>
+        <span class="nav-count" data-count="archive">0</span>
+      </button>
+      <button class="nav-item" type="button" data-view="trash">
+        <svg class="icon" aria-hidden="true"><use href="#i-trash" xlink:href="#i-trash"></use></svg>
+        <span class="nav-label">Trash</span>
+        <span class="nav-count" data-count="trash">0</span>
+      </button>
+    </nav>
+
+    <div class="side-section">
+      <div class="side-head">
+        <h2 id="categoriesHeading">Categories</h2>
+        <button class="icon-btn" type="button" id="addCategoryBtn" aria-label="Create category" title="Create category">
+          <svg class="icon icon--sm" aria-hidden="true"><use href="#i-plus" xlink:href="#i-plus"></use></svg>
+        </button>
+      </div>
+      <div class="nav" id="categoryList" aria-labelledby="categoriesHeading"></div>
+    </div>
+
+    <div class="side-foot">
+      <button class="btn btn--ghost btn--sm" type="button" id="settingsBtn">
+        <svg class="icon icon--sm" aria-hidden="true"><use href="#i-settings" xlink:href="#i-settings"></use></svg>
+        Settings
+      </button>
+      <button class="icon-btn" type="button" id="themeToggle" aria-label="Toggle color theme" title="Toggle color theme">
+        <svg class="icon" aria-hidden="true"><use href="#i-moon" xlink:href="#i-moon"></use></svg>
+      </button>
+    </div>
+  </aside>
+
+  <div class="scrim" id="scrim" hidden></div>
+
+  <!-- -------------------------------- Main -------------------------------- -->
+  <main class="main">
+
+    <header class="topbar">
+      <button class="icon-btn menu-btn" type="button" id="menuBtn"
+              aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar">
+        <svg class="icon" aria-hidden="true"><use href="#i-menu" xlink:href="#i-menu"></use></svg>
+      </button>
+      <div class="topbar-text">
+        <h1 id="pageTitle">All Bookmarks</h1>
+        <p id="pageDesc">Everything you have saved.</p>
+      </div>
+      <div class="topbar-actions">
+        <div id="categoryAdmin" style="display:flex;gap:6px"></div>
+        <button class="btn btn--primary" type="button" id="addBtn">
+          <svg class="icon icon--sm" aria-hidden="true"><use href="#i-plus" xlink:href="#i-plus"></use></svg>
+          <span class="btn-add-label">Add bookmark</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="banner" hidden></div>
+
+    <div class="toolbar">
+      <div class="search">
+        <svg class="icon" aria-hidden="true"><use href="#i-search" xlink:href="#i-search"></use></svg>
+        <label class="sr-only" for="searchInput">Search bookmarks</label>
+        <input type="search" id="searchInput" placeholder="Search titles, URLs, tags…"
+               autocomplete="off" spellcheck="false">
+        <button class="icon-btn search-clear" type="button" id="clearSearch" hidden aria-label="Clear search">
+          <svg class="icon icon--sm" aria-hidden="true"><use href="#i-x" xlink:href="#i-x"></use></svg>
+        </button>
+      </div>
+
+      <div class="toolbar-right">
+        <div class="select-wrap">
+          <label class="sr-only" for="sortSelect">Sort bookmarks</label>
+          <select id="sortSelect">
+            <option value="recent">Newest first</option>
+            <option value="oldest">Oldest first</option>
+            <option value="updated">Recently updated</option>
+            <option value="title-asc">Title A–Z</option>
+            <option value="title-desc">Title Z–A</option>
+            <option value="domain">Domain A–Z</option>
+          </select>
+          <svg class="icon icon--sm" aria-hidden="true"><use href="#i-chevron" xlink:href="#i-chevron"></use></svg>
+        </div>
+
+        <div class="seg" id="viewToggle" role="group" aria-label="Bookmark layout">
+          <button type="button" data-viewmode="grid" aria-pressed="true" aria-label="Grid layout" title="Grid layout">
+            <svg class="icon icon--sm" aria-hidden="true"><use href="#i-grid" xlink:href="#i-grid"></use></svg>
+          </button>
+          <button type="button" data-viewmode="list" aria-pressed="false" aria-label="List layout" title="List layout">
+            <svg class="icon icon--sm" aria-hidden="true"><use href="#i-list" xlink:href="#i-list"></use></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="list-head">
+      <p class="list-count" id="listCount"></p>
+      <div class="active-filters" id="activeFilters"></div>
+    </div>
+
+    <div id="content"></div>
+
+  </main>
+</div>
+
+<!-- =====================================================================
+     MODAL ROOT
+     ===================================================================== -->
+<div class="modal-root" id="modalRoot" hidden>
+  <div class="modal-backdrop" id="modalBackdrop"></div>
+  <div id="modalHost"></div>
+</div>
+
+<!-- =====================================================================
+     TOAST REGION
+     ===================================================================== -->
+<div class="toast-region" id="toastRegion" aria-live="polite" aria-relevant="additions text"></div>
+
+<script>
+/* =========================================================================
+   BOOKMARK MANAGER — application script
+   -------------------------------------------------------------------------
+   Sections
+     1.  Constants & configuration
+     2.  Small utilities (DOM, text, URL, ids, dates)
+     3.  Storage layer (read / validate / migrate / write)
+     4.  Application state
+     5.  Selectors (filter / search / sort)
+     6.  Rendering
+     7.  Dialog system
+     8.  Toasts
+     9.  Bookmark form
+     10. Category management
+     11. Import / export
+     12. Event wiring
+     13. Bootstrap
+   ========================================================================= */
+(function () {
+  'use strict';
+
+  /* =======================================================================
+     1. CONSTANTS & CONFIGURATION
+     ======================================================================= */
+
+  const STORAGE_KEY = 'bookmark-manager.state.v1';
+  const SCHEMA_VERSION = 1;
+  const EXPORT_FORMAT = 'bookmark-manager';
+  const RECENT_WINDOW_DAYS = 30;
+
+  const LIMITS = {
+    url: 2048,
+    title: 200,
+    description: 1000,
+    category: 40,
+    tag: 32,
+    tagsPerBookmark: 12,
+    categories: 200,
+    importBytes: 5 * 1024 * 1024,
+    importRecords: 5000
+  };
+
+  const SORT_OPTIONS = ['recent', 'oldest', 'updated', 'title-asc', 'title-desc', 'domain'];
+  const VIEW_MODES = ['grid', 'list'];
+  const THEME_OPTIONS = ['light', 'dark', 'system'];
+
+  const VIEW_META = {
+    all: { title: 'All Bookmarks', desc: 'Everything you have saved.' },
+    favorites: { title: 'Favorites', desc: 'Bookmarks you starred for quick access.' },
+    recent: { title: 'Recently Added', desc: 'Saved in the last 30 days.' },
+    archive: { title: 'Archive', desc: 'Bookmarks set aside but kept for later.' },
+    trash: { title: 'Trash', desc: 'Deleted bookmarks. Restore them or delete them forever.' },
+    category: { title: 'Category', desc: 'Bookmarks in this category.' }
+  };
+
+  /* =======================================================================
+     2. UTILITIES
+     ======================================================================= */
+
+  const $ = (id) => document.getElementById(id);
+
+  /** Create an element with optional class and text. Never uses innerHTML. */
+  function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined && text !== null) node.textContent = String(text);
+    return node;
+  }
+
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  const XLINK_NS = 'http://www.w3.org/1999/xlink';
+
+  /** Build an <svg><use href="#i-name"></use></svg> icon node. */
+  function svgIcon(name, extraClass) {
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('class', 'icon' + (extraClass ? ' ' + extraClass : ''));
+    svg.setAttribute('aria-hidden', 'true');
+    svg.setAttribute('focusable', 'false');
+    const use = document.createElementNS(SVG_NS, 'use');
+    use.setAttribute('href', '#i-' + name);
+    use.setAttributeNS(XLINK_NS, 'xlink:href', '#i-' + name);
+    svg.appendChild(use);
+    return svg;
+  }
+
+  /** Unique identifier that does not depend on array position. */
+  function uid(prefix) {
+    const p = prefix || 'id';
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+      return p + '_' + window.crypto.randomUUID();
+    }
+    return p + '_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
+  }
+
+  /** Collapse whitespace, strip control characters, trim, and cap length. */
+  function cleanText(value, maxLength) {
+    if (typeof value !== 'string') return '';
+    const stripped = value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
+    return stripped.replace(/\s+/g, ' ').trim().slice(0, maxLength);
+  }
+
+  /** Same as cleanText but preserves line breaks (for descriptions). */
+  function cleanMultiline(value, maxLength) {
+    if (typeof value !== 'string') return '';
+    const stripped = value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
+    return stripped.trim().slice(0, maxLength);
+  }
+
+  /**
+   * Normalise user-supplied URL input.
+   * SECURITY: only http: and https: are accepted. javascript:, data:, file:,
+   * blob: and every other scheme are rejected outright. Parsing is delegated to
+   * the browser's URL implementation so relative/garbage input fails safely.
+   * Returns a canonical absolute href, or null when invalid.
+   */
+  function normalizeUrl(raw) {
+    if (typeof raw !== 'string') return null;
+    let value = raw.trim();
+    if (!value || value.length > LIMITS.url) return null;
+    // Add an implicit https:// scheme when the user omits one.
+    if (!/^[a-z][a-z0-9+.-]*:/i.test(value)) value = 'https://' + value;
+
+    let parsed;
+    try {
+      parsed = new URL(value);
+    } catch (err) {
+      return null;
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    if (!parsed.hostname) return null;
+    return parsed.href;
+  }
+
+  /** Hostname without a leading "www.". */
+  function hostnameOf(url) {
+    try {
+      return new URL(url).hostname.replace(/^www\./i, '');
+    } catch (err) {
+      return '';
+    }
+  }
+
+  /** First letter of the registrable label, used for the site monogram. */
+  function monogramFor(url) {
+    const host = hostnameOf(url);
+    const label = host.split('.').filter(Boolean)[0] || '?';
+    return label.charAt(0).toUpperCase();
+  }
+
+  /** A sensible starting title derived from the URL (fully editable). */
+  function titleFromUrl(url) {
+    const host = hostnameOf(url);
+    if (host) return host;
+    try {
+      return new URL(url).hostname || '';
+    } catch (err) {
+      return '';
+    }
+  }
+
+  function nowIso() {
+    return new Date().toISOString();
+  }
+
+  /** Parse a value into a valid ISO string, falling back to a default. */
+  function isoOr(value, fallback) {
+    if (typeof value === 'string') {
+      const t = Date.parse(value);
+      if (Number.isFinite(t)) return new Date(t).toISOString();
+    }
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      const d = new Date(value);
+      if (!Number.isNaN(d.getTime())) return d.toISOString();
+    }
+    return fallback;
+  }
+
+  function formatDate(iso) {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '';
+    return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  }
+
+  function truncate(text, max) {
+    const s = String(text || '');
+    return s.length > max ? s.slice(0, max - 1) + '…' : s;
+  }
+
+  function isTypingTarget(node) {
+    if (!node || !node.tagName) return false;
+    const tag = node.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || node.isContentEditable === true;
+  }
+
+  /* =======================================================================
+     3. STORAGE LAYER
+     ======================================================================= */
+
+  let storageAvailable = true;   // false when localStorage throws (blocked/private)
+  let saveBlocked = false;       // true while corrupt data awaits a user decision
+  let recoveryReason = '';       // human-readable explanation for the banner
+  let rawBackup = null;          // original corrupt payload, kept for recovery
+  let lastSavedJson = null;      // avoids redundant writes
+
+  function defaultState() {
+    return {
+      version: SCHEMA_VERSION,
+      bookmarks: [],
+      categories: [],
+      prefs: { theme: 'system', view: 'grid', sort: 'recent' }
+    };
+  }
+
+  /** Read the raw JSON string from localStorage. Never throws. */
+  function readStorage() {
+    try {
+      return window.localStorage.getItem(STORAGE_KEY);
+    } catch (err) {
+      storageAvailable = false;
+      return null;
+    }
+  }
+
+  /**
+   * Write the raw JSON string. Reports quota and blocked-storage problems
+   * honestly instead of pretending the save succeeded.
+   */
+  function writeStorage(json) {
+    try {
+      window.localStorage.setItem(STORAGE_KEY, json);
+      return true;
+    } catch (err) {
+      const name = err && err.name;
+      const isQuota = name === 'QuotaExceededError' || name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
+                      (err && (err.code === 22 || err.code === 1014));
+      if (isQuota) {
+        toast('Storage is full. Export a backup, then remove some bookmarks.', { type: 'error' });
+      } else {
+        storageAvailable = false;
+        toast('This browser is blocking local storage. Changes will not be saved.', { type: 'error' });
+      }
+      return false;
+    }
+  }
+
+  /** Persist the current state. Skips writes when nothing has changed. */
+  function persist() {
+    if (saveBlocked) return false;
+    if (!storageAvailable) return false;
+    let json;
+    try {
+      json = JSON.stringify(data);
+    } catch (err) {
+      toast('Could not serialise your data.', { type: 'error' });
+      return false;
+    }
+    if (json === lastSavedJson) return true;
+    const ok = writeStorage(json);
+    if (ok) lastSavedJson = json;
+    return ok;
+  }
+
+  /** Find (case-insensitively) or create a category by name. Mutates `list`. */
+  function findOrCreateCategory(name, list) {
+    const clean = cleanText(name, LIMITS.category);
+    if (!clean) return null;
+    const existing = list.find((c) => c.name.toLowerCase() === clean.toLowerCase());
+    if (existing) return existing.id;
+    if (list.length >= LIMITS.categories) return null;
+    const category = { id: uid('cat'), name: clean };
+    list.push(category);
+    return category.id;
+  }
+
+  /** Normalise a tag list: lowercase, de-duplicated, length-capped. */
+  function sanitizeTags(raw) {
+    const source = Array.isArray(raw)
+      ? raw
+      : (typeof raw === 'string' ? raw.split(',') : []);
+    const out = [];
+    const seen = new Set();
+    for (const item of source) {
+      if (typeof item !== 'string') continue;
+      const name = cleanText(item.replace(/,/g, ' '), LIMITS.tag).toLowerCase();
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      out.push(name);
+      if (out.length >= LIMITS.tagsPerBookmark) break;
+    }
+    return out;
+  }
+
+  /** Resolve a category reference on an imported/stored record. */
+  function resolveCategoryId(raw, categories) {
+    // Preferred: explicit id that matches a known category.
+    if (typeof raw.categoryId === 'string') {
+      const found = categories.find((c) => c.id === raw.categoryId);
+      if (found) return found.id;
+    }
+    // Fallback: a plain category name (legacy / hand-written exports).
+    if (typeof raw.category === 'string' && raw.category.trim()) {
+      return findOrCreateCategory(raw.category, categories);
+    }
+    return null;
+  }
+
+  /**
+   * Validate and coerce a single bookmark record from untrusted input.
+   * Returns a safe, fully-typed object or null when unusable.
+   */
+  function sanitizeBookmark(raw, categories, seenUrls) {
+    if (!raw || typeof raw !== 'object') return null;
+
+    const url = normalizeUrl(typeof raw.url === 'string' ? raw.url : '');
+    if (!url) return null;
+
+    const urlKey = url.toLowerCase();
+    if (seenUrls) {
+      if (seenUrls.has(urlKey)) return null;
+      seenUrls.add(urlKey);
+    }
+
+    const createdAt = isoOr(raw.createdAt, nowIso());
+    const updatedAt = isoOr(raw.updatedAt, createdAt);
+    const deleted = raw.deleted === true;
+    const deletedAt = deleted ? isoOr(raw.deletedAt, updatedAt) : null;
+
+    return {
+      id: (typeof raw.id === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(raw.id)) ? raw.id : uid('bm'),
+      url: url,
+      title: cleanText(raw.title, LIMITS.title) || titleFromUrl(url),
+      description: cleanMultiline(raw.description, LIMITS.description),
+      categoryId: resolveCategoryId(raw, categories),
+      tags: sanitizeTags(raw.tags),
+      favorite: raw.favorite === true,
+      archived: raw.archived === true,
+      deleted: deleted,
+      deletedAt: deletedAt,
+      createdAt: createdAt,
+      updatedAt: updatedAt
+    };
+  }
+
+  /**
+   * Turn arbitrary parsed JSON into a trustworthy state object.
+   * Unknown/extra fields are dropped; malformed records are skipped.
+   */
+  function sanitizeState(parsed) {
+    const out = defaultState();
+    if (!parsed || typeof parsed !== 'object') return out;
+
+    // Categories first, so bookmarks can resolve their references.
+    const byName = new Map();
+    if (Array.isArray(parsed.categories)) {
+      for (const raw of parsed.categories.slice(0, LIMITS.categories)) {
+        if (!raw || typeof raw !== 'object') continue;
+        const name = cleanText(raw.name, LIMITS.category);
+        if (!name) continue;
+        const key = name.toLowerCase();
+        if (byName.has(key)) continue;
+        const id = (typeof raw.id === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(raw.id))
+          ? raw.id : uid('cat');
+        byName.set(key, { id: id, name: name });
+      }
+    }
+    out.categories = Array.from(byName.values());
+
+    // Bookmarks
+    if (Array.isArray(parsed.bookmarks)) {
+      const seenUrls = new Set();
+      const seenIds = new Set();
+      for (const raw of parsed.bookmarks.slice(0, LIMITS.importRecords)) {
+        const bookmark = sanitizeBookmark(raw, out.categories, seenUrls);
+        if (!bookmark) continue;
+        if (seenIds.has(bookmark.id)) bookmark.id = uid('bm');
+        seenIds.add(bookmark.id);
+        out.bookmarks.push(bookmark);
+      }
+    }
+
+    // Preferences
+    const prefs = (parsed.prefs && typeof parsed.prefs === 'object') ? parsed.prefs : {};
+    out.prefs = {
+      theme: THEME_OPTIONS.indexOf(prefs.theme) !== -1 ? prefs.theme : 'system',
+      view: VIEW_MODES.indexOf(prefs.view) !== -1 ? prefs.view : 'grid',
+      sort: SORT_OPTIONS.indexOf(prefs.sort) !== -1 ? prefs.sort : 'recent'
+    };
+
+    return out;
+  }
+
+  /** Enter a read-only recovery mode so corrupt data is never overwritten. */
+  function enterRecoveryMode(raw, reason) {
+    saveBlocked = true;
+    rawBackup = raw;
+    recoveryReason = reason;
+    data = defaultState();
+    lastSavedJson = raw;
+  }
+
+  /** Load, validate and migrate persisted state. */
+  function loadApp() {
+    const raw = readStorage();
+
+    if (raw === null || raw === '') {
+      data = defaultState();
+      lastSavedJson = null;
+      return;
+    }
+
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (err) {
+      enterRecoveryMode(raw, 'The saved data could not be parsed as JSON.');
+      return;
+    }
+
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      enterRecoveryMode(raw, 'The saved data has an unexpected structure.');
+      return;
+    }
+
+    const version = Number(parsed.version);
+    if (Number.isFinite(version) && version > SCHEMA_VERSION) {
+      enterRecoveryMode(raw, 'The saved data was created by a newer version of this app.');
+      return;
+    }
+
+    data = sanitizeState(parsed);
+    lastSavedJson = raw; // forces a rewrite of the sanitised form on next change
+  }
+
+  /* =======================================================================
+     4. APPLICATION STATE
+     ======================================================================= */
+
+  let data = defaultState();
+
+  /** Volatile view state — intentionally not persisted. */
+  const ui = {
+    view: 'all',
+    categoryId: null,
+    query: '',
+    tag: null,
+    drawerOpen: false
+  };
+
+  /* =======================================================================
+     5. SELECTORS
+     ======================================================================= */
+
+  function categoryById(id) {
+    if (!id) return null;
+    return data.categories.find((c) => c.id === id) || null;
+  }
+
+  function categoryName(id) {
+    const category = categoryById(id);
+    return category ? category.name : '';
+  }
+
+  function isRecent(bookmark) {
+    const t = Date.parse(bookmark.createdAt);
+    if (!Number.isFinite(t)) return false;
+    return Date.now() - t < RECENT_WINDOW_DAYS * 86400000;
+  }
+
+  /** Does this bookmark belong to the currently selected view? */
+  function matchesView(bookmark) {
+    if (ui.view === 'trash') return bookmark.deleted;
+    if (bookmark.deleted) return false;
+    if (ui.view === 'archive') return bookmark.archived;
+    if (bookmark.archived) return false;
+    if (ui.view === 'favorites') return bookmark.favorite;
+    if (ui.view === 'recent') return isRecent(bookmark);
+    if (ui.view === 'category') return bookmark.categoryId === ui.categoryId;
+    return true;
+  }
+
+  function searchHaystack(bookmark) {
+    return [
+      bookmark.title,
+      bookmark.url,
+      hostnameOf(bookmark.url),
+      bookmark.description,
+      categoryName(bookmark.categoryId),
+      bookmark.tags.join(' ')
+    ].join(' ').toLowerCase();
+  }
+
+  function sortBookmarks(list, mode) {
+    const sorted = list.slice();
+    const byTitle = (a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' });
+    const byDomain = (a, b) => {
+      const ha = hostnameOf(a.url).toLowerCase();
+      const hb = hostnameOf(b.url).toLowerCase();
+      if (ha !== hb) return ha < hb ? -1 : 1;
+      return byTitle(a, b);
+    };
+
+    switch (mode) {
+      case 'oldest':
+        sorted.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+        break;
+      case 'updated':
+        sorted.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+        break;
+      case 'title-asc':
+        sorted.sort(byTitle);
+        break;
+      case 'title-desc':
+        sorted.sort((a, b) => byTitle(b, a));
+        break;
+      case 'domain':
+        sorted.sort(byDomain);
+        break;
+      case 'recent':
+      default:
+        sorted.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        break;
+    }
+    return sorted;
+  }
+
+  /** Apply view → tag filter → search → sort, in that order. */
+  function getVisibleBookmarks() {
+    const query = ui.query.trim().toLowerCase();
+    let list = data.bookmarks.filter(matchesView);
+
+    if (ui.tag) {
+      const tag = ui.tag;
+      list = list.filter((b) => b.tags.indexOf(tag) !== -1);
+    }
+
+    if (query) {
+      list = list.filter((b) => searchHaystack(b).indexOf(query) !== -1);
+    }
+
+    return sortBookmarks(list, data.prefs.sort);
+  }
+
+  /** Aggregate counts used by the sidebar badges. */
+  function computeCounts() {
+    const counts = { all: 0, favorites: 0, recent: 0, archive: 0, trash: 0 };
+    const byCategory = new Map();
+
+    for (const bookmark of data.bookmarks) {
+      if (bookmark.deleted) { counts.trash += 1; continue; }
+      if (bookmark.archived) { counts.archive += 1; continue; }
+      counts.all += 1;
+      if (bookmark.favorite) counts.favorites += 1;
+      if (isRecent(bookmark)) counts.recent += 1;
+      if (bookmark.categoryId) {
+        byCategory.set(bookmark.categoryId, (byCategory.get(bookmark.categoryId) || 0) + 1);
+      }
+    }
+    return { counts: counts, byCategory: byCategory };
+  }
+
+  /* =======================================================================
+     6. RENDERING
+     ======================================================================= */
+
+  function render() {
+    renderSidebar();
+    renderHeader();
+    renderBanner();
+    renderActiveFilters();
+    renderList();
+    renderThemeButton();
+  }
+
+  function renderSidebar() {
+    const { counts, byCategory } = computeCounts();
+
+    document.querySelectorAll('#mainNav .nav-item').forEach((btn) => {
+      const view = btn.dataset.view;
+      const countEl = btn.querySelector('.nav-count');
+      if (countEl) countEl.textContent = String(counts[view] || 0);
+      if (ui.view === view) {
+        btn.setAttribute('aria-current', 'page');
+      } else {
+        btn.removeAttribute('aria-current');
+      }
+    });
+
+    const list = $('categoryList');
+    list.textContent = '';
+
+    if (!data.categories.length) {
+      list.appendChild(el('p', 'nav-empty', 'No categories yet'));
+      return;
+    }
+
+    const sorted = data.categories.slice().sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+
+    for (const category of sorted) {
+      const btn = el('button', 'nav-item');
+      btn.type = 'button';
+      btn.dataset.view = 'category';
+      btn.dataset.categoryId = category.id;
+
+      const icon = svgIcon('folder');
+      btn.appendChild(icon);
+      btn.appendChild(el('span', 'nav-label', category.name));
+      btn.appendChild(el('span', 'nav-count', String(byCategory.get(category.id) || 0)));
+
+      if (ui.view === 'category' && ui.categoryId === category.id) {
+        btn.setAttribute('aria-current', 'page');
+      }
+      list.appendChild(btn);
+    }
+  }
+
+  function renderHeader() {
+    const meta = VIEW_META[ui.view] || VIEW_META.all;
+    let title = meta.title;
+    let desc = meta.desc;
+
+    if (ui.view === 'category') {
+      const category = categoryById(ui.categoryId);
+      title = category ? category.name : 'Category';
+      desc = 'Bookmarks in this category.';
+    }
+
+    $('pageTitle').textContent = title;
+    $('pageDesc').textContent = desc;
+
+    // Category rename/delete affordances
+    const admin = $('categoryAdmin');
+    admin.textContent = '';
+
+    if (ui.view === 'category' && categoryById(ui.categoryId)) {
+      const rename = el('button', 'btn btn--ghost btn--sm', 'Rename');
+      rename.type = 'button';
+      rename.addEventListener('click', () => renameCategory(ui.categoryId));
+
+      const remove = el('button', 'btn btn--ghost btn--sm', 'Delete');
+      remove.type = 'button';
+      remove.addEventListener('click', () => deleteCategory(ui.categoryId));
+
+      admin.append(rename, remove);
+    }
+
+    $('sortSelect').value = data.prefs.sort;
+
+    document.querySelectorAll('#viewToggle button').forEach((btn) => {
+      btn.setAttribute('aria-pressed', String(btn.dataset.viewmode === data.prefs.view));
+    });
+  }
+
+  function renderBanner() {
+    const banner = $('banner');
+    banner.textContent = '';
+
+    if (!saveBlocked) {
+      banner.hidden = true;
+      return;
+    }
+
+    banner.hidden = false;
+    const box = el('div', 'banner');
+    box.appendChild(svgIcon('alert'));
+
+    const body = el('div', 'banner-body');
+    body.appendChild(el('p', 'banner-title', 'Your saved data could not be loaded'));
+    body.appendChild(el('p', 'banner-text',
+      (recoveryReason || 'The stored data is unreadable.') +
+      ' Nothing has been overwritten — download a copy before choosing what to do.'));
+
+    const actions = el('div', 'banner-actions');
+
+    const download = el('button', 'btn btn--sm', 'Download saved data');
+    download.type = 'button';
+    download.addEventListener('click', () => {
+      downloadFile('bookmark-manager-raw-backup.json', rawBackup || '', 'application/json');
+      toast('Raw backup downloaded.');
+    });
+
+    const reset = el('button', 'btn btn--sm btn--primary', 'Start fresh');
+    reset.type = 'button';
+    reset.addEventListener('click', async () => {
+      const ok = await confirmDialog({
+        title: 'Start with empty data?',
+        message: 'This permanently discards the unreadable saved data. Make sure you have downloaded a copy first.',
+        confirmLabel: 'Discard and start fresh'
+      });
+      if (!ok) return;
+      saveBlocked = false;
+      rawBackup = null;
+      recoveryReason = '';
+      data = defaultState();
+      lastSavedJson = null;
+      persist();
+      applyTheme();
+      render();
+      toast('Storage reset. You can start adding bookmarks.');
+    });
+
+    actions.append(download, reset);
+    body.appendChild(actions);
+    box.appendChild(body);
+    banner.appendChild(box);
+  }
+
+  function renderActiveFilters() {
+    const host = $('activeFilters');
+    host.textContent = '';
+    if (!ui.tag) return;
+
+    const chip = el('button', 'chip', '#' + ui.tag);
+    chip.type = 'button';
+    chip.setAttribute('aria-label', 'Remove tag filter ' + ui.tag);
+    chip.dataset.action = 'clear-tag';
+    chip.appendChild(svgIcon('x', 'icon--sm'));
+    host.appendChild(chip);
+  }
+
+  function renderThemeButton() {
+    const btn = $('themeToggle');
+    const resolved = document.documentElement.getAttribute('data-theme') || 'light';
+    btn.textContent = '';
+    btn.appendChild(svgIcon(resolved === 'dark' ? 'sun' : 'moon'));
+    btn.setAttribute('aria-label', resolved === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
+    btn.title = btn.getAttribute('aria-label');
+  }
+
+  /* ------------------------------ List ------------------------------ */
+
+  function renderList() {
+    const content = $('content');
+    content.textContent = '';
+
+    const items = getVisibleBookmarks();
+
+    // Meta line
+    const countLabel = items.length === 1 ? '1 bookmark' : items.length + ' bookmarks';
+    $('listCount').textContent = data.bookmarks.length ? countLabel : '';
+
+    if (!data.bookmarks.length) {
+      content.appendChild(buildEmptyState('onboarding'));
+      return;
+    }
+
+    if (!items.length) {
+      content.appendChild(buildEmptyState('no-results'));
+      return;
+    }
+
+    const container = el('div', data.prefs.view === 'list' ? 'bookmark-list' : 'bookmark-grid');
+    const fragment = document.createDocumentFragment();
+    for (const bookmark of items) {
+      fragment.appendChild(buildCard(bookmark));
+    }
+    container.appendChild(fragment);
+    content.appendChild(container);
+  }
+
+  function actionButton(options) {
+    const btn = el('button', 'icon-btn card-action' + (options.className ? ' ' + options.className : ''));
+    btn.type = 'button';
+    btn.dataset.action = options.action;
+    btn.setAttribute('aria-label', options.label);
+    btn.title = options.label;
+    if (typeof options.pressed === 'boolean') {
+      btn.setAttribute('aria-pressed', String(options.pressed));
+    }
+    btn.appendChild(svgIcon(options.icon));
+    return btn;
+  }
+
+  function buildCard(bookmark) {
+    const card = el('article', 'card');
+    card.dataset.bookmarkId = bookmark.id;
+
+    const labelSuffix = truncate(bookmark.title, 60);
+
+    /* --- main block --- */
+    const main = el('div', 'card-main');
+
+    const mark = el('span', 'site-mark', monogramFor(bookmark.url));
+    mark.setAttribute('aria-hidden', 'true');
+
+    const body = el('div', 'card-body');
+
+    const titleRow = el('div', 'card-title-row');
+
+    const link = el('a', 'card-title', bookmark.title);
+    link.href = bookmark.url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.title = bookmark.title;
+    titleRow.appendChild(link);
+
+    const host = hostnameOf(bookmark.url);
+    if (host) titleRow.appendChild(el('span', 'card-host', host));
+
+    body.appendChild(titleRow);
+
+    if (bookmark.description) {
+      body.appendChild(el('p', 'card-desc', bookmark.description));
+    }
+
+    const chips = el('div', 'card-chips');
+    const catName = categoryName(bookmark.categoryId);
+    if (catName) {
+      const chip = el('button', 'chip chip--cat', catName);
+      chip.type = 'button';
+      chip.dataset.action = 'filter-category';
+      chip.dataset.categoryId = bookmark.categoryId;
+      chip.title = 'Show bookmarks in ' + catName;
+      chips.appendChild(chip);
+    }
+    for (const tag of bookmark.tags) {
+      const chip = el('button', 'chip', '#' + tag);
+      chip.type = 'button';
+      chip.dataset.action = 'filter-tag';
+      chip.dataset.tag = tag;
+      chip.title = 'Filter by tag ' + tag;
+      chips.appendChild(chip);
+    }
+    if (chips.childNodes.length) body.appendChild(chips);
+
+    main.append(mark, body);
+
+    /* --- actions --- */
+    const actions = el('div', 'card-actions');
+
+    if (bookmark.deleted) {
+      actions.appendChild(actionButton({
+        action: 'restore', icon: 'restore',
+        label: 'Restore “' + labelSuffix + '”'
+      }));
+      actions.appendChild(actionButton({
+        action: 'purge', icon: 'trash',
+        label: 'Delete “' + labelSuffix + '” permanently'
+      }));
+    } else {
+      actions.appendChild(actionButton({
+        action: 'favorite', icon: 'star', className: 'star-btn',
+        pressed: bookmark.favorite,
+        label: (bookmark.favorite ? 'Remove “' : 'Mark “') + labelSuffix +
+               (bookmark.favorite ? '” from favorites' : '” as favorite')
+      }));
+      actions.appendChild(actionButton({
+        action: 'edit', icon: 'edit',
+        label: 'Edit “' + labelSuffix + '”'
+      }));
+      if (bookmark.archived) {
+        actions.appendChild(actionButton({
+          action: 'unarchive', icon: 'unarchive',
+          label: 'Restore “' + labelSuffix + '” from archive'
+        }));
+      } else {
+        actions.appendChild(actionButton({
+          action: 'archive', icon: 'archive',
+          label: 'Archive “' + labelSuffix + '”'
+        }));
+      }
+      actions.appendChild(actionButton({
+        action: 'trash', icon: 'trash',
+        label: 'Move “' + labelSuffix + '” to trash'
+      }));
+    }
+
+    card.append(main, actions);
+    return card;
+  }
+
+  function buildEmptyState(kind) {
+    const box = el('div', 'empty');
+
+    if (kind === 'onboarding') {
+      box.appendChild(svgIcon('inbox'));
+      box.appendChild(el('h2', null, 'No bookmarks yet'));
+      box.appendChild(el('p', null,
+        'Save your first link and it will stay in this browser. ' +
+        'You can organize everything with categories, tags and favorites.'));
+
+      const actions = el('div', 'empty-actions');
+      const add = el('button', 'btn btn--primary', 'Add your first bookmark');
+      add.type = 'button';
+      add.dataset.action = 'add';
+
+      const demo = el('button', 'btn', 'Load sample data');
+      demo.type = 'button';
+      demo.dataset.action = 'demo';
+
+      actions.append(add, demo);
+      box.appendChild(actions);
+      return box;
+    }
+
+    // No results
+    box.appendChild(svgIcon('search'));
+    box.appendChild(el('h2', null, 'No matching bookmarks'));
+
+    let message = 'Nothing matched your current filters.';
+    if (ui.query.trim()) {
+      message = 'No bookmark matches “' + truncate(ui.query.trim(), 60) + '”. Try a different word.';
+    } else if (ui.tag) {
+      message = 'No bookmark in this view carries the tag “' + ui.tag + '”.';
+    }
+    box.appendChild(el('p', null, message));
+
+    const actions = el('div', 'empty-actions');
+    if (ui.query.trim() || ui.tag) {
+      const clear = el('button', 'btn', 'Clear filters');
+      clear.type = 'button';
+      clear.dataset.action = 'clear-filters';
+      actions.appendChild(clear);
+    }
+    const add = el('button', 'btn btn--primary', 'Add bookmark');
+    add.type = 'button';
+    add.dataset.action = 'add';
+    actions.appendChild(add);
+
+    box.appendChild(actions);
+    return box;
+  }
+
+  /* =======================================================================
+     7. DIALOG SYSTEM
+     ======================================================================= */
+
+  let dialog = null; // { modal, onClose, previouslyFocused, dismissible }
+
+  /**
+   * Open a modal dialog.
+   * options: { title, description, body (Node), footer (Node|null),
+   *            width, dismissible, onClose }
+   */
+  function openDialog(options) {
+    closeDialog();
+
+    const root = $('modalRoot');
+    const host = $('modalHost');
+    host.textContent = '';
+
+    const modal = el('div', 'modal');
+    if (options.width) modal.style.maxWidth = options.width;
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+
+    const titleId = uid('dialogtitle');
+    modal.setAttribute('aria-labelledby', titleId);
+
+    const header = el('div', 'modal-header');
+    const heading = el('h2', 'modal-title', options.title || 'Dialog');
+    heading.id = titleId;
+    header.appendChild(heading);
+
+    const closeBtn = el('button', 'icon-btn');
+    closeBtn.type = 'button';
+    closeBtn.setAttribute('aria-label', 'Close dialog');
+    closeBtn.appendChild(svgIcon('x'));
+    closeBtn.addEventListener('click', () => closeDialog());
+    header.appendChild(closeBtn);
+
+    const body = el('div', 'modal-body');
+    if (options.description) body.appendChild(el('p', 'dialog-text', options.description));
+    if (options.body) body.appendChild(options.body);
+
+    modal.append(header, body);
+    if (options.footer) modal.appendChild(options.footer);
+
+    host.appendChild(modal);
+    root.hidden = false;
+    document.body.classList.add('is-locked');
+
+    dialog = {
+      modal: modal,
+      onClose: options.onClose || null,
+      previouslyFocused: document.activeElement,
+      dismissible: options.dismissible !== false
+    };
+
+    const preferred = modal.querySelector('[data-autofocus]');
+    const fallback = modal.querySelector(
+      'input:not([type="hidden"]), textarea, select, button, [tabindex]:not([tabindex="-1"])');
+    (preferred || fallback || modal).focus();
+
+    document.addEventListener('keydown', onDialogKeydown, true);
+  }
+
+  function closeDialog() {
+    if (!dialog) return;
+    const closing = dialog;
+    dialog = null;
+
+    document.removeEventListener('keydown', onDialogKeydown, true);
+    document.body.classList.remove('is-locked');
+    $('modalHost').textContent = '';
+    $('modalRoot').hidden = true;
+
+    const target = closing.previouslyFocused;
+    if (target && typeof target.focus === 'function' && document.contains(target)) {
+      target.focus();
+    }
+    if (typeof closing.onClose === 'function') closing.onClose();
+  }
+
+  function onDialogKeydown(event) {
+    if (!dialog) return;
+
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      if (dialog.dismissible) closeDialog();
+      return;
+    }
+
+    if (event.key !== 'Tab') return;
+
+    const selector = 'a[href], button:not([disabled]), input:not([disabled]), ' +
+                     'select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    const focusables = Array.prototype.filter.call(
+      dialog.modal.querySelectorAll(selector),
+      (node) => node.offsetWidth > 0 || node.offsetHeight > 0 || node === document.activeElement
+    );
+
+    if (!focusables.length) {
+      event.preventDefault();
+      return;
+    }
+
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  function buildDialogFooter(buttons) {
+    const footer = el('div', 'modal-footer');
+    for (const config of buttons) {
+      const btn = el('button', 'btn' + (config.variant === 'primary' ? ' btn--primary' : ''));
+      btn.type = 'button';
+      btn.textContent = config.label;
+      btn.addEventListener('click', () => {
+        const result = config.onClick ? config.onClick() : true;
+        if (result !== false) closeDialog();
+      });
+      footer.appendChild(btn);
+    }
+    return footer;
+  }
+
+  /** Promise-based confirmation dialog. Resolves true when confirmed. */
+  function confirmDialog(config) {
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+
+      openDialog({
+        title: config.title || 'Are you sure?',
+        body: el('p', 'dialog-text', config.message || ''),
+        width: '440px',
+        footer: buildDialogFooter([
+          { label: config.cancelLabel || 'Cancel', onClick: () => { finish(false); return true; } },
+          {
+            label: config.confirmLabel || 'Confirm',
+            variant: 'primary',
+            onClick: () => { finish(true); return true; }
+          }
+        ]),
+        onClose: () => finish(false)
+      });
+    });
+  }
+
+  /** Promise-based single-line text prompt. Resolves the string, or null. */
+  function promptDialog(config) {
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+
+      const form = el('form');
+      form.noValidate = true;
+
+      const field = el('div', 'field');
+      const label = el('label', null, config.label || 'Value');
+      label.htmlFor = 'prompt-input';
+      const input = el('input');
+      input.id = 'prompt-input';
+      input.type = 'text';
+      input.value = config.value || '';
+      input.setAttribute('data-autofocus', '');
+      input.maxLength = config.maxLength || 60;
+      input.autocomplete = 'off';
+
+      const error = el('p', 'field-error');
+      error.hidden = true;
+
+      field.append(label, input, error);
+      form.appendChild(field);
+
+      const submit = () => {
+        const value = cleanText(input.value, config.maxLength || 60);
+        if (!value) {
+          error.textContent = config.requiredMessage || 'Please enter a value.';
+          error.hidden = false;
+          input.setAttribute('aria-invalid', 'true');
+          input.focus();
+          return;
+        }
+        finish(value);
+        closeDialog();
+      };
+
+      form.addEventListener('submit', (event) => {
+        event.preventDefault();
+        submit();
+      });
+
+      openDialog({
+        title: config.title || 'Enter a value',
+        description: config.description,
+        width: '440px',
+        body: form,
+        footer: buildDialogFooter([
+          { label: 'Cancel', onClick: () => { finish(null); return true; } },
+          { label: config.confirmLabel || 'Save', variant: 'primary', onClick: submit }
+        ]),
+        onClose: () => finish(null)
+      });
+    });
+  }
+
+  /* =======================================================================
+     8. TOASTS
+     ======================================================================= */
+
+  function toast(message, options) {
+    const config = options || {};
+    const region = $('toastRegion');
+
+    const node = el('div', 'toast');
+    node.appendChild(svgIcon(config.type === 'error' ? 'alert' : 'check', 'icon--sm'));
+    node.appendChild(el('span', null, message));
+
+    let timer = null;
+
+    const dismiss = () => {
+      if (timer) clearTimeout(timer);
+      if (node.parentNode) node.parentNode.removeChild(node);
+    };
+
+    if (config.actionLabel && typeof config.onAction === 'function') {
+      const action = el('button', null, config.actionLabel);
+      action.type = 'button';
+      action.addEventListener('click', () => {
+        dismiss();
+        config.onAction();
+      });
+      node.appendChild(action);
+    }
+
+    node.addEventListener('click', (event) => {
+      if (event.target === node) dismiss();
+    });
+
+    region.appendChild(node);
+    timer = setTimeout(dismiss, config.type === 'error' ? 6500 : 4000);
+
+    // Keep the toast region from growing without bound.
+    while (region.childElementCount > 4) {
+      region.removeChild(region.firstElementChild);
+    }
+  }
+
+  /* =======================================================================
+     9. BOOKMARK FORM
+     ======================================================================= */
+
+  function openBookmarkForm(existing) {
+    const isEdit = Boolean(existing);
+
+    const draft = isEdit
+      ? {
+          url: existing.url,
+          title: existing.title,
+          description: existing.description,
+          categoryId: existing.categoryId,
+          tags: existing.tags.slice(),
+          favorite: existing.favorite
+        }
+      : {
+          url: '',
+          title: '',
+          description: '',
+          categoryId: ui.view === 'category' ? ui.categoryId : null,
+          tags: [],
+          favorite: false
+        };
+
+    const form = el('form');
+    form.noValidate = true;
+
+    /* ---------------- URL ---------------- */
+    const urlField = el('div', 'field');
+    const urlLabel = el('label', null, 'URL');
+    urlLabel.htmlFor = 'bm-url';
+    urlLabel.appendChild(el('span', 'req', ' *'));
+
+    const urlInput = el('input');
+    urlInput.id = 'bm-url';
+    urlInput.type = 'text';
+    urlInput.inputMode = 'url';
+    urlInput.autocomplete = 'off';
+    urlInput.spellcheck = false;
+    urlInput.placeholder = 'https://example.com/article';
+    urlInput.value = draft.url;
+    urlInput.setAttribute('aria-required', 'true');
+    urlInput.setAttribute('aria-describedby', 'bm-url-hint bm-url-error');
+    urlInput.setAttribute('data-autofocus', '');
+
+    const urlHint = el('p', 'hint', 'Only http:// and https:// addresses are accepted.');
+    urlHint.id = 'bm-url-hint';
+
+    const urlError = el('p', 'field-error');
+    urlError.id = 'bm-url-error';
+    urlError.hidden = true;
+
+    urlField.append(urlLabel, urlInput, urlHint, urlError);
+
+    /* ---------------- Title ---------------- */
+    const titleField = el('div', 'field');
+    const titleLabel = el('label', null, 'Title');
+    titleLabel.htmlFor = 'bm-title';
+    titleLabel.appendChild(el('span', 'req', ' *'));
+
+    const titleInput = el('input');
+    titleInput.id = 'bm-title';
+    titleInput.type = 'text';
+    titleInput.autocomplete = 'off';
+    titleInput.maxLength = LIMITS.title;
+    titleInput.placeholder = 'A short, recognisable name';
+    titleInput.value = draft.title;
+    titleInput.setAttribute('aria-required', 'true');
+    titleInput.setAttribute('aria-describedby', 'bm-title-error');
+
+    const titleError = el('p', 'field-error');
+    titleError.id = 'bm-title-error';
+    titleError.hidden = true;
+
+    titleField.append(titleLabel, titleInput, titleError);
+
+    /* ---------------- Description ---------------- */
+    const descField = el('div', 'field');
+    const descLabel = el('label', null, 'Description');
+    descLabel.htmlFor = 'bm-desc';
+
+    const descInput = el('textarea');
+    descInput.id = 'bm-desc';
+    descInput.maxLength = LIMITS.description;
+    descInput.placeholder = 'Why is this worth keeping? (optional)';
+    descInput.value = draft.description;
+
+    descField.append(descLabel, descInput);
+
+    /* ---------------- Category ---------------- */
+    const catField = el('div', 'field');
+    const catLabel = el('label', null, 'Category');
+    catLabel.htmlFor = 'bm-category';
+
+    const catInput = el('input');
+    catInput.id = 'bm-category';
+    catInput.type = 'text';
+    catInput.autocomplete = 'off';
+    catInput.maxLength = LIMITS.category;
+    catInput.setAttribute('list', 'bm-category-options');
+    catInput.placeholder = 'Choose or type a new category';
+    catInput.value = categoryName(draft.categoryId) || '';
+
+    const catList = el('datalist');
+    catList.id = 'bm-category-options';
+    for (const category of data.categories) {
+      const option = el('option');
+      option.value = category.name;
+      catList.appendChild(option);
+    }
+
+    const catHint = el('p', 'hint', 'Type a name that does not exist yet to create it.');
+    catField.append(catLabel, catInput, catList, catHint);
+
+    /* ---------------- Tags ---------------- */
+    const tagField = el('div', 'field');
+    const tagLabel = el('label', null, 'Tags');
+    tagLabel.htmlFor = 'bm-tags';
+
+    const tagInput = el('input');
+    tagInput.id = 'bm-tags';
+    tagInput.type = 'text';
+    tagInput.autocomplete = 'off';
+    tagInput.maxLength = LIMITS.tagsPerBookmark * (LIMITS.tag + 2);
+    tagInput.placeholder = 'design, reading, tools';
+    tagInput.value = draft.tags.join(', ');
+    tagInput.setAttribute('aria-describedby', 'bm-tags-hint');
+
+    const tagHint = el('p', 'hint', 'Separate tags with commas. Tags are stored in lowercase.');
+    tagHint.id = 'bm-tags-hint';
+    tagField.append(tagLabel, tagInput, tagHint);
+
+    /* ---------------- Favorite ---------------- */
+    const favLabel = el('label', 'checkbox');
+    const favInput = el('input');
+    favInput.type = 'checkbox';
+    favInput.id = 'bm-favorite';
+    favInput.checked = draft.favorite;
+    favLabel.append(favInput, el('span', null, 'Add to favorites'));
+
+    form.append(urlField, titleField, descField, catField, tagField, favLabel);
+
+    /* ---------------- Behaviour ---------------- */
+    function clearFieldError(input, errorEl) {
+      input.removeAttribute('aria-invalid');
+      errorEl.hidden = true;
+      errorEl.textContent = '';
+    }
+
+    function showFieldError(input, errorEl, message, extraNode) {
+      input.setAttribute('aria-invalid', 'true');
+      errorEl.textContent = message;
+      errorEl.hidden = false;
+      if (extraNode) errorEl.appendChild(extraNode);
+    }
+
+    urlInput.addEventListener('input', () => clearFieldError(urlInput, urlError));
+    titleInput.addEventListener('input', () => clearFieldError(titleInput, titleError));
+
+    // Derive a starting title from the URL when the field is still empty.
+    urlInput.addEventListener('blur', () => {
+      if (titleInput.value.trim()) return;
+      const normalized = normalizeUrl(urlInput.value);
+      if (!normalized) return;
+      titleInput.value = titleFromUrl(normalized).slice(0, LIMITS.title);
+    });
+
+    function submitForm() {
+      clearFieldError(urlInput, urlError);
+      clearFieldError(titleInput, titleError);
+
+      const normalizedUrl = normalizeUrl(urlInput.value);
+      if (!normalizedUrl) {
+        showFieldError(urlInput, urlError, 'Enter a valid http:// or https:// web address.');
+        urlInput.focus();
+        return;
+      }
+
+      const title = cleanText(titleInput.value, LIMITS.title);
+      if (!title) {
+        showFieldError(titleInput, titleError, 'Give this bookmark a title.');
+        titleInput.focus();
+        return;
+      }
+
+      // Duplicate detection on the normalised URL (case-insensitive).
+      const duplicate = data.bookmarks.find((b) =>
+        !b.deleted &&
+        b.url.toLowerCase() === normalizedUrl.toLowerCase() &&
+        (!existing || b.id !== existing.id)
+      );
+
+      if (duplicate) {
+        const review = el('button', 'btn btn--sm');
+        review.type = 'button';
+        review.textContent = 'Review it';
+        review.addEventListener('click', () => {
+          closeDialog();
+          focusBookmark(duplicate.id);
+        });
+        showFieldError(urlInput, urlError,
+          'This URL is already saved as “' + truncate(duplicate.title, 48) + '”.', review);
+        urlInput.focus();
+        return;
+      }
+
+      const categoryNameValue = cleanText(catInput.value, LIMITS.category);
+      const categoryId = categoryNameValue ? findOrCreateCategory(categoryNameValue, data.categories) : null;
+      const tags = sanitizeTags(tagInput.value);
+      const description = cleanMultiline(descInput.value, LIMITS.description);
+      const timestamp = nowIso();
+
+      if (existing) {
+        existing.url = normalizedUrl;
+        existing.title = title;
+        existing.description = description;
+        existing.categoryId = categoryId;
+        existing.tags = tags;
+        existing.favorite = favInput.checked;
+        existing.updatedAt = timestamp;
+      } else {
+        data.bookmarks.unshift({
+          id: uid('bm'),
+          url: normalizedUrl,
+          title: title,
+          description: description,
+          categoryId: categoryId,
+          tags: tags,
+          favorite: favInput.checked,
+          archived: false,
+          deleted: false,
+          deletedAt: null,
+          createdAt: timestamp,
+          updatedAt: timestamp
+        });
+      }
+
+      const saved = persist();
+      closeDialog();
+      render();
+
+      if (saved) {
+        toast(existing ? 'Bookmark updated.' : 'Bookmark added.');
+      }
+    }
+
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      submitForm();
+    });
+
+    const footer = buildDialogFooter([
+      { label: 'Cancel', onClick: () => true },
+      { label: isEdit ? 'Save changes' : 'Add bookmark', variant: 'primary', onClick: submitForm }
+    ]);
+    // The primary footer button must not close the dialog on its own — the
+    // form decides whether the save actually happened.
+    footer.lastChild.addEventListener('click', (event) => event.stopPropagation(), true);
+
+    openDialog({
+      title: isEdit ? 'Edit bookmark' : 'Add bookmark',
+      width: '560px',
+      body: form,
+      footer: footer
+    });
+  }
+
+  /** Scroll to and highlight a bookmark in the current view. */
+  function focusBookmark(id) {
+    const bookmark = data.bookmarks.find((b) => b.id === id);
+    if (!bookmark) return;
+
+    // Make sure the bookmark is reachable in the current view.
+    if (bookmark.deleted) {
+      setView('trash');
+    } else if (bookmark.archived) {
+      setView('archive');
+    } else if (ui.view === 'category' && ui.categoryId !== bookmark.categoryId) {
+      setView('all');
+    } else if (ui.view === 'favorites' && !bookmark.favorite) {
+      setView('all');
+    } else if (ui.view === 'recent' && !isRecent(bookmark)) {
+      setView('all');
+    }
+
+    ui.query = '';
+    $('searchInput').value = '';
+    $('clearSearch').hidden = true;
+    render();
+
+    const card = document.querySelector('[data-bookmark-id="' + cssEscape(bookmark.id) + '"]');
+    if (!card) return;
+    card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    card.style.borderColor = 'var(--text)';
+    setTimeout(() => { card.style.borderColor = ''; }, 1600);
+    const link = card.querySelector('.card-title');
+    if (link) link.focus();
+  }
+
+  /** Minimal CSS.escape polyfill for attribute selector values. */
+  function cssEscape(value) {
+    if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(value);
+    return String(value).replace(/[^a-zA-Z0-9_-]/g, function (ch) {
+      return '\\' + ch;
+    });
+  }
+
+  /* =======================================================================
+     10. BOOKMARK ACTIONS
+     ======================================================================= */
+
+  function setView(view, categoryId) {
+    ui.view = view;
+    ui.categoryId = (view === 'category') ? (categoryId || null) : null;
+    if (view !== 'category') ui.categoryId = null;
+    closeDrawer();
+    render();
+  }
+
+  function toggleFavorite(bookmark) {
+    bookmark.favorite = !bookmark.favorite;
+    bookmark.updatedAt = nowIso();
+    const saved = persist();
+    render();
+    if (saved) {
+      toast(bookmark.favorite ? 'Added to favorites.' : 'Removed from favorites.');
+    }
+  }
+
+  function setArchived(bookmark, archived) {
+    const previous = bookmark.archived;
+    bookmark.archived = archived;
+    bookmark.updatedAt = nowIso();
+    const saved = persist();
+    render();
+    if (!saved) return;
+
+    if (archived) {
+      toast('Bookmark archived.', {
+        actionLabel: 'Undo',
+        onAction: () => {
+          bookmark.archived = previous;
+          bookmark.updatedAt = nowIso();
+          persist();
+          render();
+        }
+      });
+    } else {
+      toast('Bookmark restored from archive.');
+    }
+  }
+
+  function moveToTrash(bookmark) {
+    const snapshot = { deleted: bookmark.deleted, deletedAt: bookmark.deletedAt, archived: bookmark.archived };
+    bookmark.deleted = true;
+    bookmark.deletedAt = nowIso();
+    bookmark.updatedAt = nowIso();
+    const saved = persist();
+    render();
+    if (!saved) return;
+
+    toast('Moved to trash.', {
+      actionLabel: 'Undo',
+      onAction: () => {
+        bookmark.deleted = snapshot.deleted;
+        bookmark.deletedAt = snapshot.deletedAt;
+        bookmark.archived = snapshot.archived;
+        bookmark.updatedAt = nowIso();
+        persist();
+        render();
+        toast('Bookmark restored.');
+      }
+    });
+  }
+
+  function restoreFromTrash(bookmark) {
+    bookmark.deleted = false;
+    bookmark.deletedAt = null;
+    bookmark.updatedAt = nowIso();
+    const saved = persist();
+    render();
+    if (saved) toast('Bookmark restored.');
+  }
+
+  async function purgeBookmark(bookmark) {
+    const ok = await confirmDialog({
+      title: 'Delete permanently?',
+      message: '“' + truncate(bookmark.title, 70) + '” will be removed from this browser for good. This cannot be undone.',
+      confirmLabel: 'Delete permanently'
+    });
+    if (!ok) return;
+
+    const index = data.bookmarks.findIndex((b) => b.id === bookmark.id);
+    if (index === -1) return;
+    data.bookmarks.splice(index, 1);
+    const saved = persist();
+    render();
+    if (saved) toast('Bookmark deleted permanently.');
+  }
+
+  /* =======================================================================
+     11. CATEGORY MANAGEMENT
+     ======================================================================= */
+
+  async function createCategory() {
+    const name = await promptDialog({
+      title: 'New category',
+      label: 'Category name',
+      maxLength: LIMITS.category,
+      confirmLabel: 'Create',
+      requiredMessage: 'Enter a category name.'
+    });
+    if (!name) return;
+
+    const exists = data.categories.some((c) => c.name.toLowerCase() === name.toLowerCase());
+    if (exists) {
+      toast('A category with that name already exists.', { type: 'error' });
+      return;
+    }
+    if (data.categories.length >= LIMITS.categories) {
+      toast('You have reached the maximum number of categories.', { type: 'error' });
+      return;
+    }
+
+    data.categories.push({ id: uid('cat'), name: name });
+    const saved = persist();
+    render();
+    if (saved) toast('Category “' + name + '” created.');
+  }
+
+  async function renameCategory(categoryId) {
+    const category = categoryById(categoryId);
+    if (!category) return;
+
+    const name = await promptDialog({
+      title: 'Rename category',
+      label: 'Category name',
+      value: category.name,
+      maxLength: LIMITS.category,
+      confirmLabel: 'Rename',
+      requiredMessage: 'Enter a category name.'
+    });
+    if (!name || name === category.name) return;
+
+    const clash = data.categories.some((c) =>
+      c.id !== categoryId && c.name.toLowerCase() === name.toLowerCase());
+    if (clash) {
+      toast('Another category already uses that name.', { type: 'error' });
+      return;
+    }
+
+    category.name = name;
+    const saved = persist();
+    render();
+    if (saved) toast('Category renamed.');
+  }
+
+  async function deleteCategory(categoryId) {
+    const category = categoryById(categoryId);
+    if (!category) return;
+
+    const affected = data.bookmarks.filter((b) => b.categoryId === categoryId).length;
+    const ok = await confirmDialog({
+      title: 'Delete category “' + category.name + '”?',
+      message: affected
+        ? affected + ' bookmark' + (affected === 1 ? '' : 's') +
+          ' will become uncategorized. The bookmarks themselves are not deleted.'
+        : 'This category is empty. Deleting it will not remove any bookmarks.',
+      confirmLabel: 'Delete category'
+    });
+    if (!ok) return;
+
+    data.categories = data.categories.filter((c) => c.id !== categoryId);
+    for (const bookmark of data.bookmarks) {
+      if (bookmark.categoryId === categoryId) {
+        bookmark.categoryId = null;
+        bookmark.updatedAt = nowIso();
+      }
+    }
+
+    if (ui.view === 'category' && ui.categoryId === categoryId) {
+      ui.view = 'all';
+      ui.categoryId = null;
+    }
+
+    const saved = persist();
+    render();
+    if (saved) toast('Category deleted.');
+  }
+
+  /* =======================================================================
+     12. IMPORT / EXPORT
+     ======================================================================= */
+
+  function downloadFile(filename, content, mimeType) {
+    const blob = new Blob([content], { type: mimeType || 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.rel = 'noopener';
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  }
+
+  function dateStamp() {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+
+  function exportJson() {
+    const payload = {
+      format: EXPORT_FORMAT,
+      version: SCHEMA_VERSION,
+      exportedAt: nowIso(),
+      preferences: {
+        theme: data.prefs.theme,
+        view: data.prefs.view,
+        sort: data.prefs.sort
+      },
+      categories: data.categories.map((c) => ({ id: c.id, name: c.name })),
+      bookmarks: data.bookmarks.map((b) => ({
+        id: b.id,
+        url: b.url,
+        title: b.title,
+        description: b.description,
+        categoryId: b.categoryId,
+        category: categoryName(b.categoryId) || null,
+        tags: b.tags.slice(),
+        favorite: b.favorite,
+        archived: b.archived,
+        deleted: b.deleted,
+        deletedAt: b.deletedAt,
+        createdAt: b.createdAt,
+        updatedAt: b.updatedAt
+      }))
+    };
+
+    downloadFile('bookmarks-' + dateStamp() + '.json', JSON.stringify(payload, null, 2), 'application/json');
+    toast('Exported ' + data.bookmarks.length + ' bookmark' + (data.bookmarks.length === 1 ? '' : 's') + ' as JSON.');
+  }
+
+  function csvCell(value) {
+    const text = value === null || value === undefined ? '' : String(value);
+    return /[",\r\n]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
+  }
+
+  function exportCsv() {
+    const header = ['title', 'url', 'description', 'category', 'tags', 'favorite', 'archived', 'createdAt'];
+    const rows = [header];
+
+    for (const bookmark of data.bookmarks) {
+      rows.push([
+        bookmark.title,
+        bookmark.url,
+        bookmark.description,
+        categoryName(bookmark.categoryId),
+        bookmark.tags.join('; '),
+        bookmark.favorite ? 'true' : 'false',
+        bookmark.archived ? 'true' : 'false',
+        bookmark.createdAt
+      ]);
+    }
+
+    const csv = '\ufeff' + rows.map((row) => row.map(csvCell).join(',')).join('\r\n');
+    downloadFile('bookmarks-' + dateStamp() + '.csv', csv, 'text/csv;charset=utf-8');
+    toast('Exported ' + data.bookmarks.length + ' bookmark' + (data.bookmarks.length === 1 ? '' : 's') + ' as CSV.');
+  }
+
+  /**
+   * Validate a parsed import payload into a candidate collection.
+   * Returns null when the payload is unusable, or
+   * { bookmarks, categories, skipped, duplicatesInFile }.
+   */
+  function buildImportCandidate(parsed) {
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    if (!Array.isArray(parsed.bookmarks)) return null;
+
+    if (parsed.bookmarks.length > LIMITS.importRecords) {
+      return { error: 'That file contains more than ' + LIMITS.importRecords + ' bookmarks.' };
+    }
+
+    // Reuse the same sanitiser used for local storage.
+    const holder = { categories: [] };
+    const state = sanitizeState({
+      categories: parsed.categories,
+      bookmarks: parsed.bookmarks
+    });
+
+    holder.categories = state.categories;
+
+    return {
+      bookmarks: state.bookmarks,
+      categories: state.categories,
+      total: parsed.bookmarks.length,
+      skipped: parsed.bookmarks.length - state.bookmarks.length
+    };
+  }
+
+  function handleImportFile(file) {
+    if (!file) return;
+
+    if (file.size > LIMITS.importBytes) {
+      toast('That file is too large. The limit is 5 MB.', { type: 'error' });
+      return;
+    }
+
+    const reader = new FileReader();
+
+    reader.onerror = () => {
+      toast('The file could not be read.', { type: 'error' });
+    };
+
+    reader.onload = () => {
+      const text = typeof reader.result === 'string' ? reader.result : '';
+      let parsed;
+      try {
+        parsed = JSON.parse(text);
+      } catch (err) {
+        toast('That file is not valid JSON.', { type: 'error' });
+        return;
+      }
+
+      const candidate = buildImportCandidate(parsed);
+      if (!candidate) {
+        toast('That file is not a Bookmark Manager export.', { type: 'error' });
+        return;
+      }
+      if (candidate.error) {
+        toast(candidate.error, { type: 'error' });
+        return;
+      }
+      if (!candidate.bookmarks.length) {
+        toast('No valid bookmarks were found in that file.', { type: 'error' });
+        return;
+      }
+
+      openImportPreview(candidate);
+    };
+
+    reader.readAsText(file);
+  }
+
+  function openImportPreview(candidate) {
+    const existingUrls = new Set(
+      data.bookmarks.filter((b) => !b.deleted).map((b) => b.url.toLowerCase())
+    );
+
+    const fresh = [];
+    let duplicates = 0;
+    for (const bookmark of candidate.bookmarks) {
+      if (existingUrls.has(bookmark.url.toLowerCase())) duplicates += 1;
+      else fresh.push(bookmark);
+    }
+
+    const body = el('div');
+
+    const summary = el('dl', 'stats');
+    const addStat = (label, value) => {
+      const wrap = el('div');
+      wrap.appendChild(el('dt', null, label));
+      wrap.appendChild(el('dd', null, String(value)));
+      summary.appendChild(wrap);
+    };
+    addStat('In file', candidate.total);
+    addStat('New', fresh.length);
+    addStat('Already saved', duplicates);
+    addStat('Skipped (invalid)', candidate.skipped);
+    body.appendChild(summary);
+
+    body.appendChild(el('p', 'settings-note',
+      'Only http:// and https:// links are accepted. Nothing is written until you choose an option below.'));
+
+    /* mode selection */
+    const modeWrap = el('div', 'field');
+    const legend = el('label', null, 'How should this be applied?');
+    modeWrap.appendChild(legend);
+
+    const mergeLabel = el('label', 'checkbox');
+    const mergeRadio = el('input');
+    mergeRadio.type = 'radio';
+    mergeRadio.name = 'import-mode';
+    mergeRadio.value = 'merge';
+    mergeRadio.checked = true;
+    mergeLabel.append(mergeRadio, el('span', null, 'Merge — keep my bookmarks and add the new ones'));
+
+    const replaceLabel = el('label', 'checkbox');
+    const replaceRadio = el('input');
+    replaceRadio.type = 'radio';
+    replaceRadio.name = 'import-mode';
+    replaceRadio.value = 'replace';
+    replaceLabel.append(replaceRadio,
+      el('span', null, 'Replace — delete everything here and use only this file'));
+
+    modeWrap.append(mergeLabel, replaceLabel);
+    body.appendChild(modeWrap);
+
+    let confirmed = false;
+
+    const footer = buildDialogFooter([
+      { label: 'Cancel', onClick: () => true },
+      {
+        label: 'Import',
+        variant: 'primary',
+        onClick: () => {
+          if (confirmed) return true;
+
+          const mode = replaceRadio.checked ? 'replace' : 'merge';
+
+          const run = () => {
+            confirmed = true;
+            const result = applyImport(candidate, mode, fresh);
+            toast('Imported ' + result.added + ' bookmark' + (result.added === 1 ? '' : 's') +
+                  (result.skipped ? ', skipped ' + result.skipped : '') + '.');
+            render();
+            closeDialog();
+          };
+
+          if (mode === 'replace') {
+            confirmDialog({
+              title: 'Replace all bookmarks?',
+              message: 'Your current ' + data.bookmarks.length +
+                       ' bookmark(s) and categories will be permanently replaced by the contents of this file.',
+              confirmLabel: 'Replace everything'
+            }).then((ok) => {
+              if (!ok) return;
+              run();
+            });
+            return false; // keep this dialog open until the confirmation resolves
+          }
+
+          run();
+          return true;
+        }
+      }
+    ]);
+
+    openDialog({
+      title: 'Import bookmarks',
+      width: '560px',
+      body: body,
+      footer: footer
+    });
+  }
+
+  function applyImport(candidate, mode, fresh) {
+    let added = 0;
+    let skipped = candidate.skipped;
+
+    if (mode === 'replace') {
+      // Rebuild categories with collision-safe ids, remapping bookmarks.
+      const idMap = new Map();
+      const categories = [];
+      for (const category of candidate.categories) {
+        let id = category.id;
+        if (categories.some((c) => c.id === id)) id = uid('cat');
+        idMap.set(category.id, id);
+        categories.push({ id: id, name: category.name });
+      }
+
+      const usedIds = new Set();
+      const bookmarks = candidate.bookmarks.map((bookmark) => {
+        let id = bookmark.id;
+        if (usedIds.has(id)) id = uid('bm');
+        usedIds.add(id);
+        return Object.assign({}, bookmark, {
+          id: id,
+          categoryId: bookmark.categoryId ? (idMap.get(bookmark.categoryId) || null) : null
+        });
+      });
+
+      data.categories = categories;
+      data.bookmarks = bookmarks;
+      added = bookmarks.length;
+      persist();
+      return { added: added, skipped: skipped };
+    }
+
+    // Merge mode
+    const categoryMap = new Map();
+    for (const category of candidate.categories) {
+      const existing = data.categories.find(
+        (c) => c.name.toLowerCase() === category.name.toLowerCase());
+      if (existing) {
+        categoryMap.set(category.id, existing.id);
+      } else {
+        const id = data.categories.some((c) => c.id === category.id) ? uid('cat') : category.id;
+        data.categories.push({ id: id, name: category.name });
+        categoryMap.set(category.id, id);
+      }
+    }
+
+    const usedIds = new Set(data.bookmarks.map((b) => b.id));
+    for (const bookmark of fresh) {
+      let id = bookmark.id;
+      if (usedIds.has(id)) id = uid('bm');
+      usedIds.add(id);
+      data.bookmarks.push(Object.assign({}, bookmark, {
+        id: id,
+        categoryId: bookmark.categoryId ? (categoryMap.get(bookmark.categoryId) || null) : null
+      }));
+      added += 1;
+    }
+
+    persist();
+    return { added: added, skipped: skipped };
+  }
+
+  /* ------------------------------ Sample data ------------------------------ */
+
+  function loadSampleData() {
+    const samples = [
+      ['https://developer.mozilla.org/en-US/docs/Web/JavaScript', 'MDN JavaScript reference', 'Development', ['reference', 'javascript'], true],
+      ['https://github.com', 'GitHub', 'Development', ['code', 'git'], false],
+      ['https://www.figma.com', 'Figma', 'Design', ['design', 'tools'], true],
+      ['https://css-tricks.com', 'CSS-Tricks', 'Design', ['css', 'frontend'], false],
+      ['https://news.ycombinator.com', 'Hacker News', 'Research', ['news', 'tech'], false],
+      ['https://www.smashingmagazine.com', 'Smashing Magazine', 'Design', ['design', 'reading'], false],
+      ['https://web.dev', 'web.dev', 'Development', ['performance', 'web'], false],
+      ['https://www.notion.so', 'Notion', 'Productivity', ['notes', 'tools'], true],
+      ['https://todoist.com', 'Todoist', 'Productivity', ['tasks'], false],
+      ['https://www.coursera.org', 'Coursera', 'Learning', ['courses'], false],
+      ['https://archive.org', 'Internet Archive', 'Research', ['archive'], false],
+      ['https://www.youtube.com', 'YouTube', 'Entertainment', ['video'], false]
+    ];
+
+    const stamp = Date.now();
+    let created = 0;
+
+    samples.forEach((entry, index) => {
+      const url = normalizeUrl(entry[0]);
+      if (!url) return;
+      if (data.bookmarks.some((b) => b.url.toLowerCase() === url.toLowerCase())) return;
+
+      const categoryId = findOrCreateCategory(entry[2], data.categories);
+      const createdIso = new Date(stamp - index * 86400000).toISOString();
+
+      data.bookmarks.push({
+        id: uid('bm'),
+        url: url,
+        title: entry[1],
+        description: '',
+        categoryId: categoryId,
+        tags: sanitizeTags(entry[3]),
+        favorite: entry[4],
+        archived: false,
+        deleted: false,
+        deletedAt: null,
+        createdAt: createdIso,
+        updatedAt: createdIso
+      });
+      created += 1;
+    });
+
+    if (!created) {
+      toast('Sample bookmarks are already in your collection.');
+      return;
+    }
+
+    persist();
+    render();
+    toast('Added ' + created + ' sample bookmark' + (created === 1 ? '' : 's') + '.');
+  }
+
+  async function resetEverything() {
+    const ok = await confirmDialog({
+      title: 'Delete all data?',
+      message: 'Every bookmark, category and preference stored in this browser will be removed. ' +
+               'Export a backup first if you might want them back.',
+      confirmLabel: 'Delete everything'
+    });
+    if (!ok) return;
+
+    data = defaultState();
+    saveBlocked = false;
+    rawBackup = null;
+    recoveryReason = '';
+    lastSavedJson = null;
+
+    try {
+      window.localStorage.removeItem(STORAGE_KEY);
+    } catch (err) {
+      // Ignore: the in-memory reset below still runs.
+    }
+
+    ui.view = 'all';
+    ui.categoryId = null;
+    ui.query = '';
+    ui.tag = null;
+    $('searchInput').value = '';
+    $('clearSearch').hidden = true;
+
+    applyTheme();
+    persist();
+    render();
+    toast('All local data has been deleted.');
+  }
+
+  /* =======================================================================
+     13. SETTINGS DIALOG
+     ======================================================================= */
+
+  function openSettings() {
+    const body = el('div');
+
+    /* --- Appearance --- */
+    const appearance = el('section', 'settings-section');
+    appearance.appendChild(el('h3', 'settings-title', 'Appearance'));
+
+    const themeSeg = el('div', 'seg seg--text');
+    themeSeg.setAttribute('role', 'group');
+    themeSeg.setAttribute('aria-label', 'Theme preference');
+
+    const themeButtons = [];
+    [['light', 'Light'], ['dark', 'Dark'], ['system', 'System']].forEach((pair) => {
+      const btn = el('button', null, pair[1]);
+      btn.type = 'button';
+      btn.dataset.themeChoice = pair[0];
+      btn.addEventListener('click', () => {
+        setTheme(pair[0]);
+        syncThemeSegment();
+      });
+      themeButtons.push(btn);
+      themeSeg.appendChild(btn);
+    });
+
+    function syncThemeSegment() {
+      themeButtons.forEach((btn) => {
+        btn.setAttribute('aria-pressed', String(btn.dataset.themeChoice === data.prefs.theme));
+      });
+    }
+    syncThemeSegment();
+
+    appearance.appendChild(themeSeg);
+    appearance.appendChild(el('p', 'settings-note',
+      '“System” follows your operating system colour scheme. The choice is remembered in this browser.'));
+    body.appendChild(appearance);
+
+    /* --- Default layout --- */
+    const layout = el('section', 'settings-section');
+    layout.appendChild(el('h3', 'settings-title', 'Default layout'));
+
+    const layoutSeg = el('div', 'seg seg--text');
+    layoutSeg.setAttribute('role', 'group');
+    layoutSeg.setAttribute('aria-label', 'Default layout');
+
+    [['grid', 'Grid'], ['list', 'List']].forEach((pair) => {
+      const btn = el('button', null, pair[1]);
+      btn.type = 'button';
+      btn.addEventListener('click', () => {
+        data.prefs.view = pair[0];
+        persist();
+        layoutSeg.querySelectorAll('button').forEach((node) => {
+          node.setAttribute('aria-pressed', String(node.textContent.toLowerCase() === data.prefs.view));
+        });
+        render();
+      });
+      btn.setAttribute('aria-pressed', String(data.prefs.view === pair[0]));
+      layoutSeg.appendChild(btn);
+    });
+
+    layout.appendChild(layoutSeg);
+    body.appendChild(layout);
+
+    /* --- Data --- */
+    const dataSection = el('section', 'settings-section');
+    dataSection.appendChild(el('h3', 'settings-title', 'Your data'));
+
+    const dataButtons = el('div', 'btn-row');
+
+    const exportJsonBtn = el('button', 'btn btn--sm', 'Export JSON');
+    exportJsonBtn.type = 'button';
+    exportJsonBtn.addEventListener('click', exportJson);
+
+    const exportCsvBtn = el('button', 'btn btn--sm', 'Export CSV');
+    exportCsvBtn.type = 'button';
+    exportCsvBtn.addEventListener('click', exportCsv);
+
+    const importBtn = el('button', 'btn btn--sm btn--primary', 'Import JSON…');
+    importBtn.type = 'button';
+    importBtn.addEventListener('click', () => fileInput.click());
+
+    dataButtons.append(exportJsonBtn, exportCsvBtn, importBtn);
+    dataSection.appendChild(dataButtons);
+
+    const fileInput = el('input');
+    fileInput.type = 'file';
+    fileInput.accept = 'application/json,.json';
+    fileInput.hidden = true;
+    fileInput.addEventListener('change', () => {
+      const file = fileInput.files && fileInput.files[0];
+      fileInput.value = '';
+      handleImportFile(file);
+    });
+    dataSection.appendChild(fileInput);
+
+    const dropzone = el('div', 'dropzone', 'Drop a JSON export here, or use the button above.');
+    dataSection.appendChild(dropzone);
+
+    ['dragenter', 'dragover'].forEach((type) => {
+      dropzone.addEventListener(type, (event) => {
+        event.preventDefault();
+        dropzone.classList.add('is-over');
+      });
+    });
+    ['dragleave', 'drop'].forEach((type) => {
+      dropzone.addEventListener(type, (event) => {
+        event.preventDefault();
+        dropzone.classList.remove('is-over');
+      });
+    });
+    dropzone.addEventListener('drop', (event) => {
+      const files = event.dataTransfer && event.dataTransfer.files;
+      if (files && files.length) handleImportFile(files[0]);
+    });
+
+    dataSection.appendChild(el('p', 'settings-note',
+      'Everything lives in this browser’s localStorage. It is not encrypted, not synced, ' +
+      'and it disappears if you clear site data or switch browser or device. Export regularly.'));
+
+    body.appendChild(dataSection);
+
+    /* --- Statistics --- */
+    const statsSection = el('section', 'settings-section');
+    statsSection.appendChild(el('h3', 'settings-title', 'Statistics'));
+
+    const { counts } = computeCounts();
+    const tagSet = new Set();
+    for (const bookmark of data.bookmarks) {
+      for (const tag of bookmark.tags) tagSet.add(tag);
+    }
+
+    const stats = el('dl', 'stats');
+    const addStat = (label, value) => {
+      const wrap = el('div');
+      wrap.appendChild(el('dt', null, label));
+      wrap.appendChild(el('dd', null, String(value)));
+      stats.appendChild(wrap);
+    };
+    addStat('Bookmarks', counts.all);
+    addStat('Favorites', counts.favorites);
+    addStat('Archived', counts.archive);
+    addStat('In trash', counts.trash);
+    addStat('Categories', data.categories.length);
+    addStat('Unique tags', tagSet.size);
+
+    statsSection.appendChild(stats);
+    body.appendChild(statsSection);
+
+    /* --- Keyboard shortcuts --- */
+    const shortcuts = el('section', 'settings-section');
+    shortcuts.appendChild(el('h3', 'settings-title', 'Keyboard shortcuts'));
+
+    const kbdList = el('div', 'kbd-list');
+    const addShortcut = (key, description) => {
+      kbdList.appendChild(el('kbd', null, key));
+      kbdList.appendChild(el('span', null, description));
+    };
+    addShortcut('/', 'Focus the search field');
+    addShortcut('n', 'Add a new bookmark');
+    addShortcut('Esc', 'Close dialogs, drawers, or clear search');
+    addShortcut('Tab', 'Move between controls');
+    shortcuts.appendChild(kbdList);
+    body.appendChild(shortcuts);
+
+    /* --- Danger zone --- */
+    const danger = el('section', 'settings-section');
+    danger.appendChild(el('h3', 'settings-title', 'Danger zone'));
+
+    const dangerRow = el('div', 'btn-row');
+
+    const demoBtn = el('button', 'btn btn--sm', 'Load sample data');
+    demoBtn.type = 'button';
+    demoBtn.addEventListener('click', () => {
+      loadSampleData();
+      closeDialog();
+    });
+
+    const resetBtn = el('button', 'btn btn--sm', 'Delete all data');
+    resetBtn.type = 'button';
+    resetBtn.addEventListener('click', () => {
+      closeDialog();
+      resetEverything();
+    });
+
+    dangerRow.append(demoBtn, resetBtn);
+    danger.appendChild(dangerRow);
+    body.appendChild(danger);
+
+    openDialog({
+      title: 'Settings',
+      width: '620px',
+      body: body,
+      footer: buildDialogFooter([{ label: 'Done', variant: 'primary', onClick: () => true }])
+    });
+  }
+
+  /* =======================================================================
+     14. THEME
+     ======================================================================= */
+
+  const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+
+  function resolveTheme() {
+    const pref = data.prefs.theme;
+    if (pref === 'light' || pref === 'dark') return pref;
+    return mediaQuery.matches ? 'dark' : 'light';
+  }
+
+  function applyTheme() {
+    document.documentElement.setAttribute('data-theme', resolveTheme());
+  }
+
+  function setTheme(preference) {
+    if (THEME_OPTIONS.indexOf(preference) === -1) return;
+    data.prefs.theme = preference;
+    applyTheme();
+    persist();
+    renderThemeButton();
+  }
+
+  function toggleTheme() {
+    const current = resolveTheme();
+    setTheme(current === 'dark' ? 'light' : 'dark');
+  }
+
+  if (typeof mediaQuery.addEventListener === 'function') {
+    mediaQuery.addEventListener('change', () => {
+      if (data.prefs.theme === 'system') {
+        applyTheme();
+        renderThemeButton();
+      }
+    });
+  }
+
+  /* =======================================================================
+     15. DRAWER (mobile navigation)
+     ======================================================================= */
+
+  function openDrawer() {
+    ui.drawerOpen = true;
+    $('sidebar').classList.add('is-open');
+    $('scrim').hidden = false;
+    // Force a reflow so the transition runs when unhiding the scrim.
+    void $('scrim').offsetWidth;
+    $('scrim').classList.add('is-open');
+    $('menuBtn').setAttribute('aria-expanded', 'true');
+  }
+
+  function closeDrawer() {
+    if (!ui.drawerOpen) return;
+    ui.drawerOpen = false;
+    $('sidebar').classList.remove('is-open');
+    $('scrim').classList.remove('is-open');
+    $('menuBtn').setAttribute('aria-expanded', 'false');
+    setTimeout(() => {
+      if (!ui.drawerOpen) $('scrim').hidden = true;
+    }, 220);
+  }
+
+  /* =======================================================================
+     16. EVENT WIRING
+     ======================================================================= */
+
+  function onSidebarClick(event) {
+    const navItem = event.target.closest('.nav-item');
+    if (!navItem) return;
+
+    const view = navItem.dataset.view;
+    if (!view) return;
+
+    if (view === 'category') {
+      setView('category', navItem.dataset.categoryId);
+    } else {
+      setView(view);
+    }
+  }
+
+  function onSearchInput(event) {
+    ui.query = event.target.value;
+    $('clearSearch').hidden = !ui.query;
+    renderList();
+    renderActiveFilters();
+  }
+
+  function clearSearch() {
+    ui.query = '';
+    $('searchInput').value = '';
+    $('clearSearch').hidden = true;
+    renderList();
+    renderActiveFilters();
+    $('searchInput').focus();
+  }
+
+  function setTagFilter(tag) {
+    if (!tag) {
+      ui.tag = null;
+    } else {
+      ui.tag = (ui.tag === tag) ? null : tag;
+    }
+    renderActiveFilters();
+    renderList();
+  }
+
+  function onContentClick(event) {
+    const actionEl = event.target.closest('[data-action]');
+    if (!actionEl) return;
+
+    const action = actionEl.dataset.action;
+    const card = actionEl.closest('[data-bookmark-id]');
+    const id = card ? card.dataset.bookmarkId : null;
+    const bookmark = id ? data.bookmarks.find((b) => b.id === id) : null;
+
+    switch (action) {
+      case 'favorite':
+        if (bookmark) toggleFavorite(bookmark);
+        break;
+      case 'edit':
+        if (bookmark) openBookmarkForm(bookmark);
+        break;
+      case 'archive':
+        if (bookmark) setArchived(bookmark, true);
+        break;
+      case 'unarchive':
+        if (bookmark) setArchived(bookmark, false);
+        break;
+      case 'trash':
+        if (bookmark) moveToTrash(bookmark);
+        break;
+      case 'restore':
+        if (bookmark) restoreFromTrash(bookmark);
+        break;
+      case 'purge':
+        if (bookmark) purgeBookmark(bookmark);
+        break;
+      case 'filter-tag':
+        setTagFilter(actionEl.dataset.tag || null);
+        break;
+      case 'filter-category':
+        setView('category', actionEl.dataset.categoryId || null);
+        break;
+      case 'clear-tag':
+        setTagFilter(null);
+        break;
+      case 'clear-filters':
+        ui.tag = null;
+        clearSearch();
+        break;
+      case 'add':
+        openBookmarkForm(null);
+        break;
+      case 'demo':
+        loadSampleData();
+        break;
+      default:
+        break;
+    }
+  }
+
+  function onGlobalKeydown(event) {
+    // Never hijack shortcuts while the user is typing.
+    if (isTypingTarget(event.target)) {
+      if (event.key === 'Escape' && event.target === $('searchInput') && ui.query) {
+        clearSearch();
+      }
+      return;
+    }
+
+    if (dialog) return;
+
+    if (event.key === '/' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      event.preventDefault();
+      $('searchInput').focus();
+      $('searchInput').select();
+      return;
+    }
+
+    if ((event.key === 'n' || event.key === 'N') && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      event.preventDefault();
+      openBookmarkForm(null);
+      return;
+    }
+
+    if (event.key === 'Escape') {
+      if (ui.drawerOpen) {
+        closeDrawer();
+        return;
+      }
+      if (ui.tag) {
+        setTagFilter(null);
+        return;
+      }
+      if (ui.query) clearSearch();
+    }
+  }
+
+  function wireEvents() {
+    $('addBtn').addEventListener('click', () => openBookmarkForm(null));
+    $('menuBtn').addEventListener('click', () => {
+      if (ui.drawerOpen) closeDrawer(); else openDrawer();
+    });
+    $('scrim').addEventListener('click', closeDrawer);
+    $('sidebar').addEventListener('click', onSidebarClick);
+    $('addCategoryBtn').addEventListener('click', createCategory);
+    $('settingsBtn').addEventListener('click', openSettings);
+    $('themeToggle').addEventListener('click', toggleTheme);
+
+    $('searchInput').addEventListener('input', onSearchInput);
+    $('clearSearch').addEventListener('click', clearSearch);
+
+    $('sortSelect').addEventListener('change', (event) => {
+      const value = event.target.value;
+      if (SORT_OPTIONS.indexOf(value) === -1) return;
+      data.prefs.sort = value;
+      persist();
+      renderList();
+    });
+
+    $('viewToggle').addEventListener('click', (event) => {
+      const btn = event.target.closest('[data-viewmode]');
+      if (!btn) return;
+      const mode = btn.dataset.viewmode;
+      if (VIEW_MODES.indexOf(mode) === -1) return;
+      data.prefs.view = mode;
+      persist();
+      render();
+    });
+
+    $('content').addEventListener('click', onContentClick);
+
+    $('modalBackdrop').addEventListener('mousedown', () => {
+      if (dialog && dialog.dismissible) closeDialog();
+    });
+
+    document.addEventListener('keydown', onGlobalKeydown);
+
+    // Close the mobile drawer when the viewport grows past the breakpoint.
+    window.addEventListener('resize', () => {
+      if (window.innerWidth > 900 && ui.drawerOpen) closeDrawer();
+    });
+
+    // Re-evaluate "recent" as time passes without a page reload.
+    window.setInterval(() => {
+      if (document.hidden) return;
+      if (ui.view === 'recent') {
+        renderSidebar();
+        renderList();
+      }
+    }, 60000);
+  }
+
+  /* =======================================================================
+     17. BOOTSTRAP
+     ======================================================================= */
+
+  function init() {
+    loadApp();
+    applyTheme();
+    wireEvents();
+    render();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init, { once: true });
+  } else {
+    init();
+  }
+})();
+</script>
+</body>
+</html>
